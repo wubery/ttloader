@@ -1,0 +1,14 @@
+# Проект разворачивается в Linux-контейнерах — держим LF везде,
+# чтобы shell-скрипты и конфиги не ломались от CRLF на Windows.
+* text=auto eol=lf
+
+# Явно: исполняемые скрипты и Docker-файлы — строго LF
+*.sh text eol=lf
+Dockerfile text eol=lf
+entrypoint.sh text eol=lf
+
+# Бинарники не трогаем
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.ico binary

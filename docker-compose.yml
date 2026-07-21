@@ -1,0 +1,34 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # tini как pid 1 — «пожинает» дочерние процессы Chromium (иначе копятся zombie)
+    init: true
+    environment:
+      # Часовой пояс планировщика
+      TIMEZONE: Europe/Moscow
+      HEADLESS: "true"
+      MAX_CONCURRENT_JOBS: "2"
+      FRONTEND_URL: http://localhost
+    volumes:
+      - vp_data:/data
+    # SHM для стабильной работы Chromium
+    shm_size: "1gb"
+    expose:
+      - "8000"
+      - "6080"  # noVNC (websockify) — экран интерактивного входа
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # Порт панели можно переопределить: VP_PORT=9000 ./install.sh
+      - "${VP_PORT:-8088}:80"
+    volumes:
+      # Логин/пароль (Basic Auth). Файл создаёт install.sh. read-only.
+      - ./secrets/.htpasswd:/etc/nginx/.htpasswd:ro
+
+volumes:
+  vp_data:

@@ -1,0 +1,39 @@
+# === Python (backend) ===
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# === Node (frontend) ===
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# === Данные приложения (СЕКРЕТЫ и большие файлы) ===
+# куки аккаунтов (storage_state с сессиями!), видео, баннеры, БД, вывод ffmpeg
+backend/data/
+data/
+*.db
+*.sqlite3
+
+# === Секреты ===
+# логин/пароль панели (Basic Auth)
+secrets/
+*.htpasswd
+
+# переменные окружения
+.env
+*.env
+!.env.example
+
+# === Логи / временное ===
+*.log
+build*.log
+
+# === OS / IDE ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

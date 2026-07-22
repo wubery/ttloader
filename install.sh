@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Установщик Video Poster.
-# Запуск на сервере:  ./install.sh
+# Запуск на сервере:  bash install.sh
 #
 # Генерирует логин/пароль для входа в панель (Basic Auth) и показывает их
-# ОДИН РАЗ в консоли. Пароль нигде больше не отображается.
+# в консоли. Пароль нигде больше не хранится в открытом виде.
 #
 # Переменные (необязательно):
 #   VP_PORT=9000     — порт панели (по умолчанию 8088)
@@ -33,6 +33,12 @@ command -v openssl >/dev/null 2>&1 || { err "openssl не установлен (
 export VP_PORT="${VP_PORT:-8088}"
 ADMIN_USER="${VP_USER:-admin}"
 
+# --- порт свободен? ---
+if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ":${VP_PORT} "; then
+  err "Порт ${VP_PORT} уже занят. Выберите другой:  VP_PORT=9000 bash install.sh"
+  exit 1
+fi
+
 # --- логин/пароль (Basic Auth) ---
 mkdir -p secrets
 NEED_CREDS=1
@@ -41,11 +47,26 @@ if [ -f secrets/.htpasswd ] && [ "${VP_REGEN:-0}" != "1" ]; then
 fi
 
 ADMIN_PASS=""
+print_creds() {
+  echo
+  echo "=================================================================="
+  printf "  ${GRN}Данные для входа в панель (Basic Auth):${NC}\n"
+  echo "  Логин:   $ADMIN_USER"
+  echo "  Пароль:  $ADMIN_PASS"
+  printf "  ${YEL}СОХРАНИТЕ пароль — он больше не будет показан.${NC}\n"
+  echo "  Сброс пароля:  VP_REGEN=1 bash install.sh"
+  echo "=================================================================="
+}
+
 if [ "$NEED_CREDS" = "1" ]; then
   ADMIN_PASS="${VP_PASS:-$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20)}"
   HASH="$(openssl passwd -apr1 "$ADMIN_PASS")"
   printf '%s:%s\n' "$ADMIN_USER" "$HASH" > secrets/.htpasswd
-  chmod 600 secrets/.htpasswd
+  # 644 обязательно: файл читает рабочий процесс nginx (пользователь nginx),
+  # а не root. С 600 nginx не сможет открыть файл и вернёт 500.
+  chmod 644 secrets/.htpasswd
+  # Показываем пароль СРАЗУ — чтобы он не потерялся, если сборка ниже прервётся.
+  print_creds
 fi
 
 # --- сборка и запуск ---
@@ -59,16 +80,12 @@ echo
 echo "=================================================================="
 printf "  ${GRN}Video Poster установлен и запущен${NC}\n"
 echo "  Панель:  http://$PUBIP:$VP_PORT"
+echo "=================================================================="
 if [ "$NEED_CREDS" = "1" ]; then
-  echo "  Логин:   $ADMIN_USER"
-  echo "  Пароль:  $ADMIN_PASS"
-  echo
-  printf "  ${YEL}СОХРАНИТЕ пароль — он больше не будет показан.${NC}\n"
-  printf "  ${YEL}Сброс пароля:  VP_REGEN=1 ./install.sh${NC}\n"
+  print_creds
 else
   echo "  Логин/пароль: заданы ранее (secrets/.htpasswd)."
-  echo "  Сброс пароля:  VP_REGEN=1 ./install.sh"
+  echo "  Сброс пароля:  VP_REGEN=1 bash install.sh"
 fi
-echo "=================================================================="
 echo
 $DC ps

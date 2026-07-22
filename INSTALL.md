@@ -31,6 +31,34 @@
 
 Первая сборка занимает несколько минут (тянется образ Playwright ~2 ГБ и ставится Chromium).
 
+## Ручная установка (без install.sh)
+
+Если хочешь поставить руками из git:
+
+```bash
+# 1. Клонировать
+git clone https://github.com/wubery/ttloader.git
+cd ttloader
+
+# 2. Создать логин/пароль для панели (Basic Auth).
+#    Замените ВАШ_ПАРОЛЬ на свой.
+mkdir -p secrets
+echo "admin:$(openssl passwd -apr1 'ВАШ_ПАРОЛЬ')" > secrets/.htpasswd
+chmod 644 secrets/.htpasswd      # ВАЖНО: 644, иначе nginx не прочитает файл → ошибка 500
+
+# 3. Запустить (порт можно поменять через VP_PORT)
+VP_PORT=8088 docker compose up -d --build
+
+# 4. Проверить
+docker compose ps
+```
+
+Панель будет на `http://<IP-сервера>:8088`, вход — `admin` / ВАШ_ПАРОЛЬ.
+
+> **Частая ошибка 500 после установки** — неправильные права на `secrets/.htpasswd`.
+> Файл читает процесс nginx (не root), поэтому нужен доступ на чтение: `chmod 644 secrets/.htpasswd`,
+> затем `docker compose restart frontend`.
+
 ## Параметры установки (необязательно)
 
 ```bash

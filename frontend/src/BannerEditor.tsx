@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Banner, Video } from "./api";
+import { api, Banner, Motion, Video } from "./api";
 
 // Позиция/масштаб хранятся как доли кадра (0..1), поэтому корректны для любого
 // разрешения. Редактор рисует баннер поверх <video> и даёт таскать/менять размер.
@@ -13,6 +13,8 @@ export function BannerEditor({ videos, banners, onSaved }: Props) {
   const [videoId, setVideoId] = useState<number | null>(videos[0]?.id ?? null);
   const [bannerId, setBannerId] = useState<number | null>(banners[0]?.id ?? null);
   const [pos, setPos] = useState({ x: 0.05, y: 0.05, scale: 0.25, opacity: 1 });
+  const [motion, setMotion] = useState<Motion>("none");
+  const [motionSpeed, setMotionSpeed] = useState(1);
   const [saved, setSaved] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number; os: number } | null>(null);
@@ -20,7 +22,11 @@ export function BannerEditor({ videos, banners, onSaved }: Props) {
   const banner = banners.find((b) => b.id === bannerId) || null;
 
   useEffect(() => {
-    if (banner) setPos({ x: banner.x, y: banner.y, scale: banner.scale, opacity: banner.opacity });
+    if (banner) {
+      setPos({ x: banner.x, y: banner.y, scale: banner.scale, opacity: banner.opacity });
+      setMotion(banner.motion ?? "none");
+      setMotionSpeed(banner.motion_speed ?? 1);
+    }
   }, [bannerId]);
 
   useEffect(() => {
@@ -60,7 +66,7 @@ export function BannerEditor({ videos, banners, onSaved }: Props) {
 
   async function save() {
     if (!banner) return;
-    const b = await api.updateBanner(banner.id, pos);
+    const b = await api.updateBanner(banner.id, { ...pos, motion, motion_speed: motionSpeed });
     setSaved(true);
     onSaved?.(b);
   }
@@ -104,6 +110,22 @@ export function BannerEditor({ videos, banners, onSaved }: Props) {
             onChange={(e) => { setPos((p) => ({ ...p, scale: Number(e.target.value) })); setSaved(false); }}
           />
         </label>
+        <label>
+          Движение
+          <select value={motion} onChange={(e) => { setMotion(e.target.value as Motion); setSaved(false); }}>
+            <option value="none">нет</option>
+            <option value="drift">дрейф</option>
+            <option value="bounce">отскок (DVD)</option>
+            <option value="slide">проезд</option>
+          </select>
+        </label>
+        {motion !== "none" && (
+          <label>
+            Скорость {motionSpeed.toFixed(1)}×
+            <input type="range" min={0.2} max={3} step={0.1} value={motionSpeed}
+              onChange={(e) => { setMotionSpeed(Number(e.target.value)); setSaved(false); }} />
+          </label>
+        )}
         <button className="primary" onClick={save} disabled={!banner}>
           {saved ? "Сохранено ✓" : "Сохранить позицию"}
         </button>
@@ -132,12 +154,13 @@ export function BannerEditor({ videos, banners, onSaved }: Props) {
 
           {banner && (
             <div
-              className="banner-layer"
+              className={`banner-layer ${motion !== "none" ? "motion-" + motion : ""}`}
               style={{
                 left: `${pos.x * 100}%`,
                 top: `${pos.y * 100}%`,
                 width: `${pos.scale * 100}%`,
                 opacity: pos.opacity,
+                animationDuration: motion !== "none" ? `${(8 / motionSpeed).toFixed(1)}s` : undefined,
               }}
               onPointerDown={(e) => onPointerDown(e, "move")}
             >

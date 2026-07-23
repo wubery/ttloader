@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Account, Banner, Job, LoginStage, Platform, Video } from "./api";
+import { api, Account, Banner, Job, LoginStage, Platform, SettingsData, Video } from "./api";
 import { BannerEditor } from "./BannerEditor";
 
-type Tab = "accounts" | "videos" | "banners" | "editor" | "post" | "jobs";
+type Tab = "accounts" | "videos" | "banners" | "editor" | "post" | "jobs" | "settings";
 
 export function App() {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    api.authMe().then((m) => setAuthed(m.authenticated)).catch(() => setAuthed(false));
+  }, []);
+
+  if (authed === null) return <div className="app"><p style={{ padding: 24 }}>Загрузка…</p></div>;
+  if (!authed) return <LoginPage onLogin={() => setAuthed(true)} />;
+  return <Dashboard onLogout={() => setAuthed(false)} />;
+}
+
+function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>("jobs");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
@@ -27,16 +39,22 @@ export function App() {
     return () => clearInterval(t);
   }, []);
 
+  async function logout() {
+    try { await api.logout(); } catch {}
+    onLogout();
+  }
+
   return (
     <div className="app">
       <header>
         <h1>🎬 Video Poster</h1>
         <nav>
-          {(["jobs", "post", "editor", "accounts", "videos", "banners"] as Tab[]).map((t) => (
+          {(["jobs", "post", "editor", "accounts", "videos", "banners", "settings"] as Tab[]).map((t) => (
             <button key={t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
               {tabLabel(t)}
             </button>
           ))}
+          <button className="tab" onClick={logout}>Выйти</button>
         </nav>
       </header>
 
@@ -55,13 +73,127 @@ export function App() {
         {tab === "editor" && <BannerEditor videos={videos} banners={banners} onSaved={refreshAll} />}
         {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} onCreated={() => { refreshAll(); setTab("jobs"); }} setErr={setErr} />}
         {tab === "jobs" && <Jobs jobs={jobs} accounts={accounts} videos={videos} onChange={refreshAll} setErr={setErr} />}
+        {tab === "settings" && <Settings setErr={setErr} />}
       </main>
     </div>
   );
 }
 
 function tabLabel(t: Tab) {
-  return { jobs: "Очередь", post: "＋ Новый пост", editor: "Баннер+превью", accounts: "Аккаунты", videos: "Видео", banners: "Баннеры" }[t];
+  return { jobs: "Очередь", post: "＋ Новый пост", editor: "Баннер+превью", accounts: "Аккаунты", videos: "Видео", banners: "Баннеры", settings: "Настройки" }[t];
+}
+
+function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [tgStep, setTgStep] = useState(false);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function doLogin() {
+    setBusy(true); setErr(null);
+    try { await api.login(username, password); onLogin(); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function tgRequest() {
+    setBusy(true); setErr(null);
+    try { await api.tgLoginRequest(); setTgStep(true); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function tgVerify() {
+    setBusy(true); setErr(null);
+    try { await api.tgLoginVerify(code); onLogin(); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="login-page">
+      <div className="card login-card">
+        <h1>🎬 Video Poster</h1>
+        {err && <div className="warn">{err}</div>}
+        <div className="col" style={{ gap: 8 }}>
+          <input placeholder="Логин" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input type="password" placeholder="Пароль" value={password} onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doLogin()} />
+          <button className="primary" disabled={busy || !username || !password} onClick={doLogin}>Войти</button>
+        </div>
+        <hr />
+        {!tgStep ? (
+          <button disabled={busy} onClick={tgRequest}>Войти через Telegram</button>
+        ) : (
+          <div className="col" style={{ gap: 8 }}>
+            <p className="hint">Код отправлен в Telegram — введите его.</p>
+            <input placeholder="Код из Telegram" value={code} onChange={(e) => setCode(e.target.value)} />
+            <button className="primary" disabled={busy || !code} onClick={tgVerify}>Подтвердить</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Settings({ setErr }: { setErr: (s: string) => void }) {
+  const [s, setS] = useState<SettingsData | null>(null);
+  const [token, setToken] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [newPass, setNewPass] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [ver, setVer] = useState<{ version: string; update_status: string; update_requested: boolean } | null>(null);
+
+  useEffect(() => {
+    api.getSettings().then((d) => { setS(d); setChatId(d.tg_chat_id ?? ""); setEnabled(d.tg_login_enabled); })
+      .catch((e) => setErr(e.message));
+    const load = () => api.systemVersion().then(setVer).catch(() => {});
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function doUpdate() {
+    try { await api.systemUpdate(); setMsg("Обновление запущено — панель перезапустится через минуту."); }
+    catch (e: any) { setErr(e.message); }
+  }
+
+  async function save() {
+    setMsg(null);
+    try {
+      const body: any = { tg_chat_id: chatId, tg_login_enabled: enabled };
+      if (token) body.tg_bot_token = token;
+      if (newPass) body.new_password = newPass;
+      const d = await api.updateSettings(body);
+      setS(d); setToken(""); setNewPass(""); setMsg("Сохранено ✓");
+    } catch (e: any) { setErr(e.message); }
+  }
+
+  if (!s) return <p>Загрузка…</p>;
+  return (
+    <div className="card" style={{ maxWidth: 560 }}>
+      <h3>Настройки</h3>
+      <div className="col" style={{ gap: 8 }}>
+        <b>Telegram</b>
+        <input placeholder={s.tg_bot_configured ? "Токен бота (задан, ввод заменит)" : "Токен бота @BotFather"} value={token} onChange={(e) => setToken(e.target.value)} />
+        <input placeholder="Ваш chat_id" value={chatId} onChange={(e) => setChatId(e.target.value)} />
+        <label className="row"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Разрешить вход в панель через Telegram</label>
+        <hr />
+        <b>Смена пароля администратора</b>
+        <input type="password" placeholder="Новый пароль (пусто — не менять)" value={newPass} onChange={(e) => setNewPass(e.target.value)} />
+        <div className="row">
+          <button className="primary" onClick={save}>Сохранить</button>
+          {msg && <span className="ok">{msg}</span>}
+        </div>
+        <p className="hint">Уведомления о постинге и упавших прокси приходят в этот chat_id. Бот команды: /queue, /accounts, присланное видео добавляется в библиотеку.</p>
+        <hr />
+        <b>Обновление</b>
+        <div className="row">
+          <span className="hint">Версия: {ver?.version ?? "…"}</span>
+          <button onClick={doUpdate}>Обновить с GitHub</button>
+        </div>
+        {ver?.update_status && <span className="hint">Статус: {ver.update_status}</span>}
+      </div>
+    </div>
+  );
 }
 
 // ---------------- Accounts ----------------
@@ -118,6 +250,10 @@ function Accounts({ accounts, onChange, setErr }: { accounts: Account[]; onChang
               <label className="filebtn">
                 Импорт кук (JSON)
                 <input type="file" accept="application/json,.json" hidden onChange={(e) => onCookies(a.id, e.target.files?.[0] ?? null)} />
+              </label>
+              <label className="row" style={{ gap: 4 }} title="Подмена хеша видео перед постингом">
+                <input type="checkbox" checked={a.uniqueize} onChange={(e) => api.updateAccount(a.id, { uniqueize: e.target.checked }).then(onChange).catch((x) => setErr(x.message))} />
+                уникализация
               </label>
               <ProxyEditor a={a} onChange={onChange} setErr={setErr} />
             </div>

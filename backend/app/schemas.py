@@ -12,12 +12,14 @@ class AccountCreate(BaseModel):
     name: str
     platform: Platform
     proxy_url: str | None = None
+    uniqueize: bool | None = None
 
 
 class AccountUpdate(BaseModel):
     name: str | None = None
     proxy_url: str | None = None
     active: bool | None = None
+    uniqueize: bool | None = None
 
 
 class AccountOut(BaseModel):
@@ -30,6 +32,7 @@ class AccountOut(BaseModel):
     proxy_ok: bool | None
     proxy_ip: str | None
     proxy_checked_at: datetime | None
+    uniqueize: bool
     active: bool
     has_cookies: bool
     created_at: datetime
@@ -63,6 +66,36 @@ class LoginStatusOut(BaseModel):
     account_name: str | None = None
 
 
+# ---------- Auth / Settings ----------
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class TelegramCodeIn(BaseModel):
+    code: str
+
+
+class AuthMeOut(BaseModel):
+    authenticated: bool
+    username: str | None = None
+    tg_login: bool = False
+
+
+class SettingsOut(BaseModel):
+    admin_user: str
+    tg_bot_configured: bool
+    tg_chat_id: str | None
+    tg_login_enabled: bool
+
+
+class SettingsUpdate(BaseModel):
+    tg_bot_token: str | None = None   # "" очищает
+    tg_chat_id: str | None = None
+    tg_login_enabled: bool | None = None
+    new_password: str | None = None
+
+
 # ---------- Videos ----------
 class VideoOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -83,6 +116,8 @@ class BannerUpdate(BaseModel):
     y: float | None = None
     scale: float | None = None
     opacity: float | None = None
+    motion: str | None = None
+    motion_speed: float | None = None
 
 
 class BannerOut(BaseModel):
@@ -96,6 +131,8 @@ class BannerOut(BaseModel):
     y: float
     scale: float
     opacity: float
+    motion: str
+    motion_speed: float
     created_at: datetime
 
 

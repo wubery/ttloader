@@ -76,6 +76,8 @@ def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
         _validate_proxy(payload.proxy_url)
         _ensure_proxy_unique(db, payload.proxy_url)
     acc = Account(name=payload.name, platform=payload.platform, proxy_url=payload.proxy_url)
+    if payload.uniqueize is not None:
+        acc.uniqueize = payload.uniqueize
     db.add(acc)
     db.commit()
     db.refresh(acc)
@@ -96,6 +98,8 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
         acc.name = payload.name
     if payload.active is not None:
         acc.active = payload.active
+    if payload.uniqueize is not None:
+        acc.uniqueize = payload.uniqueize
     db.commit()
     db.refresh(acc)
     return acc

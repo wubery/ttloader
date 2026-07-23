@@ -52,11 +52,12 @@ def _settings():
         db.close()
 
 
-def send_message(token: str, chat_id: str, text: str) -> None:
+def send_message(token: str, chat_id: str, text: str) -> bool:
     try:
-        _api("sendMessage", token, {"chat_id": chat_id, "text": text}, timeout=15)
+        r = _api("sendMessage", token, {"chat_id": chat_id, "text": text}, timeout=15)
+        return bool(r.get("ok"))
     except Exception:  # noqa: BLE001
-        pass
+        return False
 
 
 def notify(text: str) -> None:
@@ -75,9 +76,10 @@ def issue_login_code() -> bool:
     if not (token and chat_id and enabled):
         return False
     code = f"{secrets.randbelow(1000000):06d}"
-    _login_codes[code] = time.time() + 300  # 5 минут
-    send_message(token, chat_id, f"Код для входа в панель Video Poster: {code}\nДействует 5 минут.")
-    return True
+    ok = send_message(token, chat_id, f"Код для входа в панель Video Poster: {code}\nДействует 5 минут.")
+    if ok:
+        _login_codes[code] = time.time() + 300  # 5 минут, только если реально отправлено
+    return ok
 
 
 def check_login_code(code: str) -> bool:

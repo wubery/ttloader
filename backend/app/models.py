@@ -40,6 +40,10 @@ class Account(Base):
     cookies_path: Mapped[str | None] = mapped_column(String(500), default=None)
     # Прокси в формате http://user:pass@host:port или socks5://host:port
     proxy_url: Mapped[str | None] = mapped_column(String(300), default=None)
+    # Результат последней проверки прокси (обновляет планировщик и кнопка «Проверить IP»)
+    proxy_ok: Mapped[bool | None] = mapped_column(default=None)
+    proxy_ip: Mapped[str | None] = mapped_column(String(64), default=None)
+    proxy_checked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

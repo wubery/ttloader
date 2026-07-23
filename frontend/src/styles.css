@@ -42,9 +42,9 @@ main { margin-top: 8px; }
   width: min(1200px, 95vw); max-height: 92vh; display: flex; flex-direction: column; gap: 8px;
   box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
-.modal .novnc {
-  flex: 1; width: 100%; min-height: 70vh; border: 0; border-radius: 6px; background: #000;
-}
+.login-modal { width: min(460px, 95vw); }
+.login-modal input { width: 100%; }
+.login-shot { max-width: 100%; border-radius: 6px; border: 1px solid var(--border); }
 .formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 10px; }
 
 input, select, textarea {

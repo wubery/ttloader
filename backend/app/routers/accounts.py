@@ -14,7 +14,9 @@ from ..schemas import (
     AccountCreate,
     AccountOut,
     AccountUpdate,
-    LoginStartOut,
+    LoginCodeIn,
+    LoginCredentialsIn,
+    LoginStageOut,
     LoginStatusOut,
     ProxyCheckOut,
 )
@@ -158,16 +160,43 @@ async def check_proxy(account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Аккаунт не найден")
     if not acc.proxy_url:
         return ProxyCheckOut(ok=False, ip=None, error="У аккаунта не задан прокси")
+
+    from datetime import datetime
+
+    ok, ip, err = False, None, None
     try:
         ip = await proxy_egress_ip(acc.proxy_url)
-        return ProxyCheckOut(ok=True, ip=ip, error=None)
+        ok = True
     except (UploadError, ValueError) as e:
-        return ProxyCheckOut(ok=False, ip=None, error=str(e))
+        err = str(e)
     except Exception as e:  # noqa: BLE001 — сетевые/прокси ошибки показываем как есть
-        return ProxyCheckOut(ok=False, ip=None, error=f"Прокси недоступен: {e}")
+        err = f"Прокси недоступен: {e}"
+    # сохраняем результат в аккаунт (тот же статус, что показывает автопроверка)
+    acc.proxy_ok = ok
+    acc.proxy_ip = ip
+    acc.proxy_checked_at = datetime.now()
+    db.commit()
+    return ProxyCheckOut(ok=ok, ip=ip, error=err)
 
 
-# ---------- Интерактивный вход (noVNC) ----------
+# ---------- Встроенный вход (логин/пароль → код с почты) ----------
+def _apply_saved_state(acc: Account, db: Session, state: dict) -> None:
+    """Сохраняет полученный storage_state в куки аккаунта."""
+    path = _save_storage_state(acc.id, state)
+    if acc.cookies_path and os.path.exists(acc.cookies_path):
+        os.remove(acc.cookies_path)
+    acc.cookies_path = path
+    db.commit()
+
+
+def _stage_out(result: dict) -> LoginStageOut:
+    return LoginStageOut(
+        stage=result["stage"],
+        screenshot=result.get("screenshot"),
+        message=result.get("message"),
+    )
+
+
 @router.get("/login/status", response_model=LoginStatusOut)
 def login_status():
     return login_manager.status()
@@ -180,46 +209,45 @@ async def login_cancel():
     return {"ok": True}
 
 
-@router.post("/{account_id}/login/start", response_model=LoginStartOut)
-async def login_start(account_id: int, db: Session = Depends(get_db)):
-    """Запускает браузер на сервере через прокси аккаунта и открывает страницу входа.
-    Экран отдаётся через noVNC — панель показывает его в iframe."""
+@router.post("/{account_id}/login/credentials", response_model=LoginStageOut)
+async def login_credentials(account_id: int, payload: LoginCredentialsIn, db: Session = Depends(get_db)):
+    """Начинает вход: заполняет логин/пароль на TikTok через прокси аккаунта.
+    Возвращает стадию: done | email_code | captcha | unknown."""
     acc = db.get(Account, account_id)
     if acc is None:
         raise HTTPException(404, "Аккаунт не найден")
     if acc.platform.value not in LOGIN_URLS:
         raise HTTPException(400, f"Вход для платформы {acc.platform.value} не поддержан")
     try:
-        await login_manager.start(
+        result = await login_manager.start_credentials(
             account_id=acc.id,
             account_name=acc.name,
             platform=acc.platform.value,
             proxy_url=acc.proxy_url,
-            cookies_path=acc.cookies_path,
-            display=settings.login_display,
+            username=payload.username,
+            password=payload.password,
         )
     except UploadError as e:
         raise HTTPException(409, str(e))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Не удалось запустить браузер: {e}")
-    return LoginStartOut(account_id=acc.id, novnc_url=settings.novnc_url)
+        raise HTTPException(500, f"Ошибка входа: {e}")
+    if result.get("storage_state") is not None:
+        _apply_saved_state(acc, db, result["storage_state"])
+    return _stage_out(result)
 
 
-@router.post("/{account_id}/login/finish", response_model=AccountOut)
-async def login_finish(account_id: int, db: Session = Depends(get_db)):
-    """Сохраняет storage_state открытой сессии в куки аккаунта и закрывает браузер."""
+@router.post("/{account_id}/login/code", response_model=LoginStageOut)
+async def login_code(account_id: int, payload: LoginCodeIn, db: Session = Depends(get_db)):
+    """Отправляет код с почты. При успехе сохраняет куки и закрывает сессию."""
     acc = db.get(Account, account_id)
     if acc is None:
         raise HTTPException(404, "Аккаунт не найден")
     try:
-        state = await login_manager.finish(account_id)
+        result = await login_manager.submit_code(account_id, payload.code)
     except UploadError as e:
         raise HTTPException(409, str(e))
-
-    path = _save_storage_state(account_id, state)
-    if acc.cookies_path and os.path.exists(acc.cookies_path):
-        os.remove(acc.cookies_path)
-    acc.cookies_path = path
-    db.commit()
-    db.refresh(acc)
-    return acc
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Ошибка подтверждения кода: {e}")
+    if result.get("storage_state") is not None:
+        _apply_saved_state(acc, db, result["storage_state"])
+    return _stage_out(result)

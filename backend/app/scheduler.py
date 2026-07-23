@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -14,7 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from .config import settings
 from .db import SessionLocal
-from .models import Job, JobStatus
+from .models import Account, Job, JobStatus
 from .services.runner import run_job
 
 _executor = ThreadPoolExecutor(max_workers=settings.max_concurrent_jobs)
@@ -56,9 +57,45 @@ def _poll_due_jobs() -> None:
         db.close()
 
 
+def _check_proxies() -> None:
+    """Периодическая проверка прокси всех активных аккаунтов: пишет egress-IP/статус,
+    при провале — уведомление в Telegram (если настроен)."""
+    from .services.uploaders.base import proxy_egress_ip
+
+    db = SessionLocal()
+    try:
+        accounts = (
+            db.query(Account)
+            .filter(Account.active.is_(True), Account.proxy_url.isnot(None))
+            .all()
+        )
+        for acc in accounts:
+            ok, ip, err = False, None, None
+            try:
+                ip = asyncio.run(proxy_egress_ip(acc.proxy_url))
+                ok = True
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+            acc.proxy_ok = ok
+            acc.proxy_ip = ip
+            acc.proxy_checked_at = datetime.now()
+            db.commit()
+            if not ok:
+                try:  # Telegram появляется на Этапе 4 — до него это no-op
+                    from .services.telegram import notify
+                    notify(f"⚠️ Прокси аккаунта «{acc.name}» недоступен: {err}")
+                except Exception:  # noqa: BLE001
+                    pass
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(_poll_due_jobs, "interval", seconds=60, id="poll_due_jobs",
                        replace_existing=True, max_instances=1)
+    if settings.proxy_check_minutes and settings.proxy_check_minutes > 0:
+        _scheduler.add_job(_check_proxies, "interval", minutes=settings.proxy_check_minutes,
+                           id="check_proxies", replace_existing=True, max_instances=1)
     _scheduler.start()
 
 

@@ -1,0 +1,29 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "http-in",
+      "listen": "0.0.0.0",
+      "port": 10809,
+      "protocol": "http",
+      "settings": {}
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ВАШ_СЕРВЕР",
+            "port": 9154,
+            "users": [
+              { "id": "ВАШ_UUID", "encryption": "none" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": { "network": "tcp", "security": "none" }
+    }
+  ]
+}

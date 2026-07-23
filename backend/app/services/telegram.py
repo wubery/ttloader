@@ -20,11 +20,24 @@ _login_codes: dict[str, float] = {}  # code -> expiry ts
 _poller: threading.Thread | None = None
 _running = False
 
+# Если у сервера нет прямого доступа к Telegram (блокировки провайдера) — можно
+# пустить трафик бота через HTTP-прокси (например, локальный xray-клиент, который
+# оборачивает VLESS). Задаётся env TELEGRAM_PROXY=http://xray:10809.
+_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()
+
+
+def _opener() -> urllib.request.OpenerDirector:
+    if _PROXY:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": _PROXY, "https": _PROXY})
+        )
+    return urllib.request.build_opener()
+
 
 def _api(method: str, token: str, params: dict, timeout: int = 30) -> dict:
     data = urllib.parse.urlencode(params).encode()
     url = f"{_API}/bot{token}/{method}"
-    with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout) as r:
+    with _opener().open(urllib.request.Request(url, data=data), timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
@@ -156,7 +169,7 @@ def _intake_video(token: str, chat_id: str, video: dict) -> None:
         ext = os.path.splitext(file_path)[1].lower() or ".mp4"
         fname = f"{uuid.uuid4().hex}{ext}"
         dest = os.path.join(settings.videos_dir, fname)
-        with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
+        with _opener().open(url, timeout=120) as r, open(dest, "wb") as f:
             f.write(r.read())
         db = SessionLocal()
         try:

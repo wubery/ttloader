@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Account, Banner, Job, Platform, Video } from "./api";
+import { api, Account, Banner, Job, LoginStage, Platform, Video } from "./api";
 import { BannerEditor } from "./BannerEditor";
 
 type Tab = "accounts" | "videos" | "banners" | "editor" | "post" | "jobs";
@@ -69,8 +69,7 @@ function Accounts({ accounts, onChange, setErr }: { accounts: Account[]; onChang
   const [name, setName] = useState("");
   const [platform, setPlatform] = useState<Platform>("tiktok");
   const [proxy, setProxy] = useState("");
-  const [login, setLogin] = useState<{ id: number; name: string; url: string } | null>(null);
-  const [loginBusy, setLoginBusy] = useState(false);
+  const [login, setLogin] = useState<{ id: number; name: string } | null>(null);
 
   async function create() {
     try {
@@ -81,22 +80,6 @@ function Accounts({ accounts, onChange, setErr }: { accounts: Account[]; onChang
   async function onCookies(id: number, f: File | null) {
     if (!f) return;
     try { await api.uploadCookies(id, f); onChange(); } catch (e: any) { setErr(e.message); }
-  }
-  async function startLogin(a: Account) {
-    setLoginBusy(true);
-    try {
-      let r;
-      try {
-        r = await api.loginStart(a.id);
-      } catch (e) {
-        // Возможно, повисла прошлая сессия (окно закрыли/панель обновили без отмены).
-        // Сбрасываем её и пробуем ещё раз.
-        await api.loginCancel().catch(() => {});
-        r = await api.loginStart(a.id);
-      }
-      setLogin({ id: a.id, name: a.name, url: r.novnc_url });
-    } catch (e: any) { setErr(e.message); }
-    finally { setLoginBusy(false); }
   }
 
   return (
@@ -122,13 +105,15 @@ function Accounts({ accounts, onChange, setErr }: { accounts: Account[]; onChang
               <div>
                 <b>{a.name}</b> <span className="badge">{a.platform}</span>{" "}
                 {a.has_cookies ? <span className="ok">куки ✓</span> : <span className="bad">нет кук</span>}{" "}
-                {a.proxy_url ? <span className="badge">прокси</span> : <span className="bad">без прокси</span>}
+                {a.proxy_url ? <span className="badge">прокси</span> : <span className="bad">без прокси</span>}{" "}
+                {a.proxy_url && a.proxy_ok === true && <span className="ok">IP {a.proxy_ip} ✓</span>}
+                {a.proxy_url && a.proxy_ok === false && <span className="bad">прокси ✗</span>}
               </div>
               <button className="danger" onClick={() => api.deleteAccount(a.id).then(onChange)}>Удалить</button>
             </div>
             <div className="row">
-              <button className="primary" disabled={loginBusy} title={a.proxy_url ? "Войти через прокси аккаунта" : "Войти без прокси — через собственный IP сервера (твой домашний IP)"} onClick={() => startLogin(a)}>
-                {loginBusy ? "Открываю…" : a.proxy_url ? "Войти в браузере" : "Войти (через IP сервера)"}
+              <button className="primary" title="Войти по логину и паролю через прокси аккаунта" onClick={() => setLogin({ id: a.id, name: a.name })}>
+                Войти (логин/пароль)
               </button>
               <label className="filebtn">
                 Импорт кук (JSON)
@@ -153,16 +138,21 @@ function Accounts({ accounts, onChange, setErr }: { accounts: Account[]; onChang
 }
 
 function LoginModal({ login, onDone, onClose, setErr }: {
-  login: { id: number; name: string; url: string };
+  login: { id: number; name: string };
   onDone: () => void;
   onClose: () => void;
   setErr: (s: string) => void;
 }) {
-  const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState<"creds" | "code" | "captcha">("creds");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
   const savedRef = useRef(false);
 
-  // Если окно входа закрыли/размонтировали не через «Готово» — освобождаем сессию,
-  // чтобы она не «повисла» на сервере. beforeunload ловит закрытие вкладки/refresh.
+  // Освобождаем серверную сессию входа при закрытии/refresh.
   useEffect(() => {
     const onUnload = () => { if (!savedRef.current) navigator.sendBeacon?.("/api/accounts/login/cancel"); };
     window.addEventListener("beforeunload", onUnload);
@@ -172,13 +162,28 @@ function LoginModal({ login, onDone, onClose, setErr }: {
     };
   }, []);
 
-  async function save() {
-    setSaving(true);
+  function handleStage(r: LoginStage) {
+    if (r.stage === "done") { savedRef.current = true; onDone(); return; }
+    if (r.stage === "email_code") { setStep("code"); setMsg("TikTok отправил код на почту — введите его."); return; }
+    setStep("captcha"); setScreenshot(r.screenshot); setMsg(r.message || "Неожиданный шаг.");
+  }
+
+  async function submitCreds() {
+    if (!username || !password) return;
+    setBusy(true); setMsg(null);
     try {
-      await api.loginFinish(login.id);
-      savedRef.current = true;
-      onDone();
-    } catch (e: any) { setErr(e.message); setSaving(false); }
+      await api.loginCancel().catch(() => {});  // сброс возможной повисшей сессии
+      handleStage(await api.loginCredentials(login.id, { username, password }));
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  async function submitCode() {
+    if (!code) return;
+    setBusy(true); setMsg(null);
+    try {
+      handleStage(await api.loginCode(login.id, code));
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
   }
   async function cancel() {
     try { await api.loginCancel(); } catch {}
@@ -187,16 +192,40 @@ function LoginModal({ login, onDone, onClose, setErr }: {
 
   return (
     <div className="modal-overlay" onClick={cancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal login-modal" onClick={(e) => e.stopPropagation()}>
         <div className="row between">
           <b>Вход: {login.name}</b>
-          <div className="row">
-            <button className="primary" onClick={save} disabled={saving}>{saving ? "Сохраняю…" : "Готово — сохранить куки"}</button>
-            <button className="danger" onClick={cancel}>Отмена</button>
-          </div>
+          <button className="danger" onClick={cancel}>Закрыть</button>
         </div>
-        <p className="hint">Залогинься в открывшемся браузере (пароль/SMS/капча — как обычно). Трафик идёт через прокси аккаунта. Когда увидишь, что вошёл — нажми «Готово».</p>
-        <iframe className="novnc" src={login.url} title="Вход в аккаунт" />
+
+        {step === "creds" && (
+          <div className="col" style={{ gap: 8 }}>
+            <p className="hint">Логин/пароль нужны один раз для авторизации; вход идёт через прокси аккаунта, затем — код с почты. Пароль не сохраняется.</p>
+            <input placeholder="Логин / email / телефон" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input type="password" placeholder="Пароль" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <button className="primary" disabled={busy || !username || !password} onClick={submitCreds}>
+              {busy ? "Вхожу…" : "Войти"}
+            </button>
+          </div>
+        )}
+
+        {step === "code" && (
+          <div className="col" style={{ gap: 8 }}>
+            {msg && <p className="hint">{msg}</p>}
+            <input placeholder="Код с почты" value={code} onChange={(e) => setCode(e.target.value)} />
+            <button className="primary" disabled={busy || !code} onClick={submitCode}>
+              {busy ? "Проверяю…" : "Подтвердить код"}
+            </button>
+          </div>
+        )}
+
+        {step === "captcha" && (
+          <div className="col" style={{ gap: 8 }}>
+            {msg && <p className="bad">{msg}</p>}
+            {screenshot && <img className="login-shot" src={screenshot} alt="Скриншот шага TikTok" />}
+            <p className="hint">Капчу в панели решить нельзя. Пройди вход в антидетект-браузере через этот же прокси и импортируй куки (кнопка «Импорт кук»).</p>
+          </div>
+        )}
       </div>
     </div>
   );

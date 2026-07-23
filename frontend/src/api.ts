@@ -9,6 +9,9 @@ export interface Account {
   name: string;
   platform: Platform;
   proxy_url: string | null;
+  proxy_ok: boolean | null;
+  proxy_ip: string | null;
+  proxy_checked_at: string | null;
   active: boolean;
   has_cookies: boolean;
   created_at: string;
@@ -20,9 +23,10 @@ export interface ProxyCheck {
   error: string | null;
 }
 
-export interface LoginStart {
-  account_id: number;
-  novnc_url: string;
+export interface LoginStage {
+  stage: "done" | "email_code" | "captcha" | "unknown";
+  screenshot: string | null;
+  message: string | null;
 }
 
 export interface Video {
@@ -103,10 +107,18 @@ export const api = {
   },
   checkProxy: (id: number) =>
     fetch(`/api/accounts/${id}/check-proxy`, { method: "POST" }).then((r) => j<ProxyCheck>(r)),
-  loginStart: (id: number) =>
-    fetch(`/api/accounts/${id}/login/start`, { method: "POST" }).then((r) => j<LoginStart>(r)),
-  loginFinish: (id: number) =>
-    fetch(`/api/accounts/${id}/login/finish`, { method: "POST" }).then((r) => j<Account>(r)),
+  loginCredentials: (id: number, b: { username: string; password: string }) =>
+    fetch(`/api/accounts/${id}/login/credentials`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(b),
+    }).then((r) => j<LoginStage>(r)),
+  loginCode: (id: number, code: string) =>
+    fetch(`/api/accounts/${id}/login/code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    }).then((r) => j<LoginStage>(r)),
   loginCancel: () => fetch(`/api/accounts/login/cancel`, { method: "POST" }).then((r) => j<any>(r)),
 
   // videos

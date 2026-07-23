@@ -27,6 +27,9 @@ class AccountOut(BaseModel):
     name: str
     platform: Platform
     proxy_url: str | None
+    proxy_ok: bool | None
+    proxy_ip: str | None
+    proxy_checked_at: datetime | None
     active: bool
     has_cookies: bool
     created_at: datetime
@@ -38,9 +41,20 @@ class ProxyCheckOut(BaseModel):
     error: str | None = None
 
 
-class LoginStartOut(BaseModel):
-    account_id: int
-    novnc_url: str
+class LoginCredentialsIn(BaseModel):
+    username: str
+    password: str
+
+
+class LoginCodeIn(BaseModel):
+    code: str
+
+
+class LoginStageOut(BaseModel):
+    # done | email_code | captcha | unknown
+    stage: str
+    screenshot: str | None = None  # data:image/png;base64,... для стадии captcha
+    message: str | None = None
 
 
 class LoginStatusOut(BaseModel):

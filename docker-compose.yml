@@ -16,7 +16,6 @@ services:
     shm_size: "1gb"
     expose:
       - "8000"
-      - "6080"  # noVNC (websockify) — экран интерактивного входа
 
   frontend:
     build: ./frontend

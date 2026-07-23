@@ -30,6 +30,13 @@ def parse_proxy(proxy_url: str | None) -> ProxyConfig | None:
     p = urlparse(proxy_url)
     if not p.scheme or not p.hostname:
         raise ValueError(f"Некорректный proxy_url: {proxy_url}")
+    # Chromium (движок Playwright) НЕ поддерживает авторизацию в SOCKS-прокси.
+    if p.scheme.lower().startswith("socks") and (p.username or p.password):
+        raise ValueError(
+            "Chromium не поддерживает SOCKS5 с логином/паролем. "
+            "Укажите прокси как http://user:pass@host:port "
+            "(обычно тот же адрес провайдера работает и по HTTP)."
+        )
     server = f"{p.scheme}://{p.hostname}"
     if p.port:
         server += f":{p.port}"

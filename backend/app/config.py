@@ -25,18 +25,14 @@ class Settings(BaseSettings):
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
 
-    # Playwright: показывать окно браузера при постинге (удобно для отладки/логина)
+    # Playwright: показывать окно браузера при постинге (удобно для отладки)
     headless: bool = True
-
-    # Интерактивный вход (noVNC). Дисплей Xvfb и URL клиента noVNC, который панель
-    # открывает в iframe. path=... указывает websocket-путь через nginx.
-    login_display: str = ":99"
-    novnc_url: str = (
-        "/novnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&path=novnc/websockify"
-    )
 
     # Максимум одновременных задач постинга
     max_concurrent_jobs: int = 2
+
+    # Период автопроверки прокси аккаунтов (минуты). 0 — выключить.
+    proxy_check_minutes: int = 30
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir, self.cookies_dir):

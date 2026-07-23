@@ -9,6 +9,21 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
 
+class AppSettings(Base):
+    """Единственная строка настроек панели (id=1): вход и Telegram."""
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    admin_user: Mapped[str] = mapped_column(String(120), default="admin")
+    admin_pass_hash: Mapped[str | None] = mapped_column(String(255), default=None)
+    session_secret: Mapped[str | None] = mapped_column(String(128), default=None)
+    # Telegram
+    tg_bot_token: Mapped[str | None] = mapped_column(String(120), default=None)
+    tg_chat_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    tg_login_enabled: Mapped[bool] = mapped_column(default=False)
+
+
 class Platform(str, enum.Enum):
     tiktok = "tiktok"
     youtube = "youtube"
@@ -44,6 +59,8 @@ class Account(Base):
     proxy_ok: Mapped[bool | None] = mapped_column(default=None)
     proxy_ip: Mapped[str | None] = mapped_column(String(64), default=None)
     proxy_checked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Уникализация видео (подмена хеша/фингерпринта) перед постингом
+    uniqueize: Mapped[bool] = mapped_column(default=True, server_default="1")
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -88,6 +105,9 @@ class Banner(Base):
     y: Mapped[float] = mapped_column(Float, default=0.05)
     scale: Mapped[float] = mapped_column(Float, default=0.25)  # ширина баннера / ширина кадра
     opacity: Mapped[float] = mapped_column(Float, default=1.0)
+    # Движение баннера по кадру: none | drift | bounce | slide; motion_speed — множитель.
+    motion: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
+    motion_speed: Mapped[float] = mapped_column(Float, default=1.0, server_default="1.0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     jobs: Mapped[list[Job]] = relationship(back_populates="banner")

@@ -53,6 +53,9 @@ def run_job(job_id: int) -> None:
                     banner_is_video=(banner.type == BannerType.video),
                     output_path=out_path,
                     x=x, y=y, scale=scale, opacity=banner.opacity,
+                    motion=getattr(banner, "motion", "none") or "none",
+                    motion_speed=getattr(banner, "motion_speed", 1.0) or 1.0,
+                    uniqueize=bool(getattr(account, "uniqueize", True)),
                 )
             except media.MediaError as e:
                 job.status = JobStatus.failed
@@ -63,6 +66,25 @@ def run_job(job_id: int) -> None:
             job.output_filename = out_name
             source_path = out_path
             _append_log(job, "Баннер наложен.")
+            db.commit()
+        elif getattr(account, "uniqueize", True):
+            # Баннера нет, но включена уникализация — отдельный проход (новый хеш).
+            job.status = JobStatus.rendering
+            _append_log(job, "Уникализирую видео (подмена хеша)…")
+            db.commit()
+            out_name = f"job{job.id}_{int(datetime.now().timestamp())}.mp4"
+            out_path = os.path.join(settings.output_dir, out_name)
+            try:
+                media.render_uniqueize(video_path=video_path, output_path=out_path)
+            except media.MediaError as e:
+                job.status = JobStatus.failed
+                job.error = str(e)
+                _append_log(job, f"Ошибка ffmpeg: {e}")
+                db.commit()
+                return
+            job.output_filename = out_name
+            source_path = out_path
+            _append_log(job, "Готово (уникализировано).")
             db.commit()
 
         # 2) Загрузка через браузер
@@ -98,6 +120,15 @@ def run_job(job_id: int) -> None:
             job.error = result.error or "Неизвестная ошибка постинга"
             _append_log(job, f"Не удалось опубликовать: {job.error}")
         db.commit()
+
+        try:  # уведомление в Telegram (no-op, если не настроен)
+            from .telegram import notify
+            if result.ok:
+                notify(f"✅ Пост опубликован: {account.name} [{account.platform.value}] — задача #{job.id}")
+            else:
+                notify(f"❌ Пост не удался: {account.name} — задача #{job.id}\n{job.error}")
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as e:  # noqa: BLE001
         db.rollback()
         job = db.get(Job, job_id)

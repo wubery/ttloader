@@ -10,8 +10,14 @@ services:
       HEADLESS: "true"
       MAX_CONCURRENT_JOBS: "2"
       FRONTEND_URL: http://localhost
+      # Админ-логин/пароль панели (первый запуск). Задаёт install.sh через .env.
+      ADMIN_USER: "${VP_ADMIN_USER:-admin}"
+      ADMIN_PASS: "${VP_ADMIN_PASS:-}"
     volumes:
       - vp_data:/data
+      # Общий каталог для самообновления: панель ставит флаг, хостовый updater.sh
+      # (systemd/cron) делает git pull + пересборку. Контейнер не трогает docker.
+      - ./update:/update
     # SHM для стабильной работы Chromium
     shm_size: "1gb"
     expose:
@@ -25,9 +31,6 @@ services:
     ports:
       # Порт панели можно переопределить: VP_PORT=9000 ./install.sh
       - "${VP_PORT:-8088}:80"
-    volumes:
-      # Логин/пароль (Basic Auth). Файл создаёт install.sh. read-only.
-      - ./secrets/.htpasswd:/etc/nginx/.htpasswd:ro
 
 volumes:
   vp_data:

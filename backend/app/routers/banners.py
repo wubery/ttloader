@@ -60,7 +60,7 @@ def update_banner(banner_id: int, payload: BannerUpdate, db: Session = Depends(g
     banner = db.get(Banner, banner_id)
     if banner is None:
         raise HTTPException(404, "Баннер не найден")
-    for field in ("name", "x", "y", "scale", "opacity"):
+    for field in ("name", "x", "y", "scale", "opacity", "motion", "motion_speed"):
         val = getattr(payload, field)
         if val is not None:
             setattr(banner, field, val)

@@ -1,0 +1,21 @@
+# Опциональный туннель для Telegram через VLESS (xray-клиент как сайдкар).
+# Нужен, если у сервера нет прямого доступа к api.telegram.org (блокировки провайдера).
+# Через туннель идёт ТОЛЬКО трафик бота (TELEGRAM_PROXY), не весь сервер.
+#
+# Использование:
+#   1) cp xray/config.example.json xray/config.json  и впишите свой VLESS
+#   2) docker compose -f docker-compose.yml -f docker-compose.xray.yml up -d --build
+services:
+  xray:
+    image: teddysun/xray:latest
+    restart: unless-stopped
+    volumes:
+      - ./xray/config.json:/etc/xray/config.json:ro
+    expose:
+      - "10809"
+
+  backend:
+    environment:
+      TELEGRAM_PROXY: "http://xray:10809"
+    depends_on:
+      - xray

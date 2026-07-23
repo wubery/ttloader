@@ -26,6 +26,9 @@ secrets/
 # рантайм-каталог самообновления (флаг/версия/статус/лог)
 update/
 
+# реальный xray-конфиг с VLESS (uuid) — в git не кладём; есть config.example.json
+xray/config.json
+
 # переменные окружения
 .env
 *.env

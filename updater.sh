@@ -56,7 +56,11 @@ remote_base() {
 
 # git с версии 2.35 отказывается работать в чужом (по владельцу) репозитории —
 # ловится, если апдейтер запущен от root, а файлы принадлежат пользователю.
+# Плюс отключаем слежение за правами файлов: install.sh делает chmod +x, и на
+# клоне с Windows-машины это выглядело как локальная правка, из-за которой
+# git pull отказывался обновляться.
 ensure_git_safe() {
+  git config core.fileMode false 2>/dev/null || true
   git rev-parse --git-dir >/dev/null 2>update/.own_err && { rm -f update/.own_err; return 0; }
   if grep -qi 'dubious ownership' update/.own_err; then
     git config --global --add safe.directory "$(pwd)" 2>/dev/null || true

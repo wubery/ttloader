@@ -10,6 +10,7 @@ Chat ID может быть несколько (через запятую) — �
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -19,6 +20,8 @@ import urllib.request
 from datetime import datetime, timedelta
 
 from ..db import SessionLocal
+
+log = logging.getLogger(__name__)
 
 _API = "https://api.telegram.org"
 _login_codes: dict[str, float] = {}  # code -> expiry ts
@@ -72,14 +75,28 @@ def _settings() -> tuple[str | None, list[str], bool]:
 
 
 def send_message(token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> bool:
-    try:
-        params: dict = {"chat_id": chat_id, "text": text}
-        if reply_markup:
-            params["reply_markup"] = json.dumps(reply_markup)
-        r = _api("sendMessage", token, params, timeout=15)
-        return bool(r.get("ok"))
-    except Exception:  # noqa: BLE001
-        return False
+    """Отправка сообщения с повторами.
+
+    Через туннель (VLESS/прокси) соединение периодически рвётся по таймауту:
+    без повтора уведомление молча теряется. Ошибку пишем в лог, а не глотаем.
+    """
+    params: dict = {"chat_id": chat_id, "text": text}
+    if reply_markup:
+        params["reply_markup"] = json.dumps(reply_markup)
+    last: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = _api("sendMessage", token, params, timeout=20)
+            if r.get("ok"):
+                return True
+            log.warning("Telegram отклонил сообщение в чат %s: %s", chat_id, r.get("description"))
+            return False  # ответ получен, но Telegram отказал — повтор не поможет
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    log.warning("Не удалось отправить сообщение в чат %s: %s", chat_id, last)
+    return False
 
 
 def notify(text: str) -> None:

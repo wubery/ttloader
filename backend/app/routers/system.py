@@ -10,6 +10,7 @@ import os
 import time
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -30,7 +31,41 @@ def version():
         "version": _read("version", "unknown"),
         "update_status": _read("status", ""),
         "update_requested": os.path.exists(os.path.join(UPDATE_DIR, "requested")),
+        # ok | auth_required (приватный репо без токена) | error | no_git | "" (нет апдейтера)
+        "git_status": _read("git_status", ""),
     }
+
+
+class GitTokenIn(BaseModel):
+    token: str
+
+
+@router.post("/git-token")
+def set_git_token(payload: GitTokenIn):
+    """Передаёт токен GitHub хостовому апдейтеру (для приватного репозитория).
+
+    Токен НЕ хранится в БД: он кладётся в /update/git_token с правами 600, а
+    updater.sh переносит его в git credential store и файл удаляет.
+    """
+    tok = payload.token.strip()
+    if not tok or len(tok) > 400 or any(c.isspace() for c in tok):
+        return {"ok": False, "error": "Токен выглядит некорректно (пусто или есть пробелы)."}
+    if not os.path.isdir(UPDATE_DIR):
+        return {"ok": False, "error": "Каталог обновления недоступен (updater не установлен)."}
+    path = os.path.join(UPDATE_DIR, "git_token")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(tok)
+    # Контейнер пишет от root, а updater.sh на хосте может работать от обычного
+    # пользователя — отдаём файл владельцу каталога, иначе токен ему не прочитать.
+    try:
+        st = os.stat(UPDATE_DIR)
+        os.chown(path, st.st_uid, st.st_gid)
+    except (OSError, AttributeError):  # не root или Windows — оставляем как есть
+        pass
+    with open(os.path.join(UPDATE_DIR, "status"), "w", encoding="utf-8") as f:
+        f.write("Токен передан апдейтеру, применяется…")
+    return {"ok": True}
 
 
 @router.post("/update")

@@ -11,6 +11,8 @@
 #   VP_USER=admin    — логин администратора
 #   VP_PASS=...      — задать свой пароль (иначе сгенерируется случайный)
 #   VP_REGEN=1       — пересоздать .env с новыми логином/паролем
+#   VP_GIT_TOKEN=... — токен GitHub, если репозиторий приватный (для обновлений).
+#                      Можно не задавать здесь, а вписать потом в панели.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -67,12 +69,32 @@ print_creds() {
   echo "=================================================================="
 }
 
+# Каталог флага обновления создаём ДО compose: иначе его создаст docker от root и
+# хостовый updater.sh (если он работает не от root) не сможет туда писать.
+mkdir -p update
+
 info "Сборка и запуск контейнеров (первый раз — несколько минут)…"
 $DC up -d --build
 
-# --- самообновление: каталог флага + версия + хостовый updater ---
-mkdir -p update
+# --- самообновление: версия + хостовый updater ---
 git rev-parse --short HEAD > update/version 2>/dev/null || echo "unknown" > update/version
+
+# Приватный репозиторий: токен GitHub → в git credential store (не в remote-URL).
+if [ -n "${VP_GIT_TOKEN:-}" ] && git rev-parse --git-dir >/dev/null 2>&1; then
+  GH_HOST="$(git remote get-url origin 2>/dev/null | sed -nE 's#^https?://([^@/]*@)?([^/]+)/.*#\2#p')"
+  GH_HOST="${GH_HOST:-github.com}"
+  ( umask 077; printf 'https://x-access-token:%s@%s\n' "$VP_GIT_TOKEN" "$GH_HOST" > .git-credentials )
+  chmod 600 .git-credentials
+  git config credential.helper "store --file=$(pwd)/.git-credentials"
+  ORIG_URL="$(git remote get-url origin 2>/dev/null || true)"
+  CLEAN_URL="$(printf '%s' "$ORIG_URL" | sed -E 's#^(https?://)[^@/]*@#\1#')"
+  if [ -n "$ORIG_URL" ] && [ "$ORIG_URL" != "$CLEAN_URL" ]; then git remote set-url origin "$CLEAN_URL"; fi
+  if GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
+    info "Токен GitHub принят — обновление из приватного репозитория работает"
+  else
+    err "Токен GitHub не даёт доступа к репозиторию (нужно право Contents: Read)"
+  fi
+fi
 chmod +x updater.sh 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1 && [ -w /etc/systemd/system ]; then
   cat > /etc/systemd/system/vp-updater.service <<EOF

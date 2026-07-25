@@ -34,6 +34,9 @@ xray/config.json
 *.env
 !.env.example
 
+# токен GitHub для обновлений из приватного репозитория (git credential store)
+.git-credentials
+
 # === Логи / временное ===
 *.log
 build*.log

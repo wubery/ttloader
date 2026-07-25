@@ -474,6 +474,9 @@ body {
 .badge-vp-info { background: rgba(155,140,245,0.15); color: var(--vp-accent); }
 .badge-vp-muted { background: var(--vp-bg2); color: var(--vp-muted); }
 
+/* разделитель внутри карточки в цвет темы (bootstrap-утилиты берут свой --bs-border-color) */
+.border-vp { border-color: var(--vp-border) !important; }
+
 /* --- Status dots --- */
 .status-dot {
   width: 8px;

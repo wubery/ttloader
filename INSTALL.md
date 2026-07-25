@@ -92,6 +92,61 @@ docker compose down
   `git pull` + пересборку). Работает, только если проект **склонирован через git**.
 - Вручную: `git pull && docker compose up -d --build`.
 
+## Приватный репозиторий (доступ коллеге + обновления по токену)
+
+### 1. Дать доступ коллеге
+
+GitHub → репозиторий → **Settings → Collaborators → Add people** → его ник → роль
+**Write** (или **Read**, если правки не нужны). Он получит приглашение на почту.
+
+Раздел «Contributors» на GitHub руками не редактируется — он строится из истории
+коммитов: человек появится там сам, когда его коммит попадёт в основную ветку.
+
+### 2. Сделать репозиторий приватным
+
+GitHub → **Settings → General → Danger Zone → Change repository visibility →
+Make private**. Коллеги-collaborators доступ сохраняют, посторонние — теряют.
+
+### 3. Токен, чтобы обновление продолжало работать
+
+Пароль GitHub для git давно не принимает — нужен **токен**:
+
+GitHub → **Settings → Developer settings → Personal access tokens →
+Fine-grained tokens → Generate new token**:
+
+- **Repository access**: Only select repositories → этот репозиторий;
+- **Permissions → Repository permissions → Contents: Read-only** (больше не нужно);
+- срок — на своё усмотрение (после истечения токен надо будет заменить).
+
+Токен вида `github_pat_…` вписывается **в панели**: «Настройки» → «Обновление» →
+«Токен для приватного репозитория». Кнопка «Обновить с GitHub» после этого работает
+как раньше — логин/пароль панель не спрашивает.
+
+Как это хранится: токен **не попадает в БД**. Панель передаёт его хостовому
+апдейтеру через файл `update/git_token` (права 600), тот переносит токен в
+`.git-credentials` (600, в `.gitignore`) и файл сразу удаляет. В `git remote -v`
+и в логах токен не появляется.
+
+Рядом с кнопкой обновления видно состояние доступа: «доступ к репозиторию есть» /
+«нужен токен GitHub» / «установлено не из git».
+
+### 4. Установка на сервер коллеги (репозиторий уже приватный)
+
+```bash
+git clone https://<ТОКЕН>@github.com/wubery/ttloader.git video-poster
+cd video-poster
+VP_GIT_TOKEN=<ТОКЕН> bash install.sh
+```
+
+`VP_GIT_TOKEN` сразу настроит доступ для обновлений (можно не задавать — тогда
+вписать токен потом в панели). Токен из URL клона `install.sh` уберёт, чтобы он не
+светился в `git remote -v`.
+
+Альтернатива токену — **deploy key**: `ssh-keygen -t ed25519` на сервере, публичный
+ключ в GitHub → Settings → **Deploy keys** (read-only), `git remote set-url origin
+git@github.com:wubery/ttloader.git`. Ключ действует только на этот репозиторий и не
+истекает по сроку.
+
 ## Важно
 
 - Данные (аккаунты, куки, видео, БД) — в docker-томе `vp_data`, при обновлении сохраняются.

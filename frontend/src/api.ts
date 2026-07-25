@@ -119,6 +119,14 @@ export interface AuthMe {
   tg_login: boolean;
 }
 
+export interface SystemVersion {
+  version: string;
+  update_status: string;
+  update_requested: boolean;
+  /** ok | auth_required (приватный репо без токена) | error | no_git | "" */
+  git_status: string;
+}
+
 export interface SettingsData {
   admin_user: string;
   tg_bot_configured: boolean;
@@ -145,8 +153,13 @@ export const api = {
     }).then((r) => j<any>(r)),
 
   // system
-  systemVersion: () => fetch("/api/system/version").then((r) => j<{ version: string; update_status: string; update_requested: boolean }>(r)),
+  systemVersion: () => fetch("/api/system/version").then((r) => j<SystemVersion>(r)),
   systemUpdate: () => fetch("/api/system/update", { method: "POST" }).then((r) => j<any>(r)),
+  systemGitToken: (token: string) =>
+    fetch("/api/system/git-token", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    }).then((r) => j<{ ok: boolean; error?: string }>(r)),
 
   // settings
   getSettings: () => fetch("/api/settings").then((r) => j<SettingsData>(r)),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, createContext, useContext, useMemo } from "react";
-import { api, Account, Banner, Job, LoginStage, Platform, SettingsData, Video } from "./api";
+import { api, Account, Banner, Job, LoginStage, Platform, SettingsData, SystemVersion, Video } from "./api";
 import { BannerEditor } from "./BannerEditor";
 
 /* ================================================================
@@ -1288,7 +1288,9 @@ function Settings() {
   const [chatId, setChatId] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [newPass, setNewPass] = useState("");
-  const [ver, setVer] = useState<{ version: string; update_status: string; update_requested: boolean } | null>(null);
+  const [ver, setVer] = useState<SystemVersion | null>(null);
+  const [gitToken, setGitToken] = useState("");
+  const [gitOpen, setGitOpen] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -1299,9 +1301,21 @@ function Settings() {
     return () => clearInterval(t);
   }, []);
 
+  // приватный репозиторий без токена — сразу открываем поле для токена
+  useEffect(() => { if (ver?.git_status === "auth_required") setGitOpen(true); }, [ver?.git_status]);
+
   async function doUpdate() {
     try { await api.systemUpdate(); toast.add("success", "Обновление запущено — панель перезапустится через минуту."); }
     catch (e: any) { toast.add("error", e.message); }
+  }
+
+  async function saveGitToken() {
+    try {
+      const r = await api.systemGitToken(gitToken);
+      if (!r.ok) { toast.add("error", r.error ?? "Не удалось сохранить токен"); return; }
+      setGitToken("");
+      toast.add("success", "Токен передан — апдейтер проверит доступ через несколько секунд.");
+    } catch (e: any) { toast.add("error", e.message); }
   }
 
   async function save() {
@@ -1362,11 +1376,41 @@ function Settings() {
         <div className="vp-card-header">
           <h3><i className="bi bi-cloud-arrow-up me-2 text-accent" />Обновление</h3>
         </div>
-        <div className="d-flex align-items-center gap-3">
+        <div className="d-flex align-items-center gap-3 flex-wrap">
           <span className="fs-sm text-muted">Версия: {ver?.version ?? "..."}</span>
           <button className="btn btn-vp-outline btn-sm" onClick={doUpdate}><i className="bi bi-download me-1" />Обновить с GitHub</button>
+          {ver?.git_status === "ok" && <span className="badge-vp badge-vp-success"><i className="bi bi-check-circle me-1" />доступ к репозиторию есть</span>}
+          {ver?.git_status === "auth_required" && <span className="badge-vp badge-vp-warning"><i className="bi bi-lock me-1" />нужен токен GitHub</span>}
+          {ver?.git_status === "no_git" && <span className="badge-vp badge-vp-muted">установлено не из git — обновление недоступно</span>}
         </div>
         {ver?.update_status && <p className="fs-sm text-muted mt-2 mb-0">Статус: {ver.update_status}</p>}
+
+        {ver?.git_status !== "no_git" && (
+          <div className="mt-3 pt-3 border-top border-vp">
+            {!gitOpen ? (
+              <button className="btn btn-link btn-sm p-0 fs-sm" onClick={() => setGitOpen(true)}>
+                <i className="bi bi-key me-1" />Токен для приватного репозитория
+              </button>
+            ) : (
+              <div className="d-flex flex-column gap-2">
+                <label className="form-label vp mb-0">Токен GitHub (для приватного репозитория)</label>
+                <input className="form-control vp" type="password" placeholder="github_pat_… или ghp_…"
+                       value={gitToken} onChange={(e) => setGitToken(e.target.value)} />
+                <div className="form-text fs-sm">
+                  GitHub → Settings → Developer settings → <b>Fine-grained tokens</b>: доступ только к этому
+                  репозиторию, право <b>Contents: Read-only</b>. Токен не сохраняется в базе — он передаётся
+                  апдейтеру на хосте и хранится только в git credential store (chmod 600).
+                </div>
+                <div className="d-flex gap-2">
+                  <button className="btn btn-vp btn-sm" disabled={!gitToken.trim()} onClick={saveGitToken}>
+                    <i className="bi bi-check-lg me-1" />Сохранить токен
+                  </button>
+                  <button className="btn btn-vp-outline btn-sm" onClick={() => { setGitToken(""); setGitOpen(false); }}>Скрыть</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

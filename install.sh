@@ -73,6 +73,13 @@ print_creds() {
 # хостовый updater.sh (если он работает не от root) не сможет туда писать.
 mkdir -p update
 
+# Если настроен туннель для Telegram — фиксируем оба compose-файла в .env, чтобы
+# и ручные docker compose-команды, и апдейтер поднимали стек вместе с xray.
+if [ -f xray/config.json ] && ! grep -qs '^COMPOSE_FILE=' .env; then
+  echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.xray.yml' >> .env
+  info "Обнаружен xray/config.json — включён туннель для Telegram (COMPOSE_FILE в .env)"
+fi
+
 info "Сборка и запуск контейнеров (первый раз — несколько минут)…"
 $DC up -d --build
 

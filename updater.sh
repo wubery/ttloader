@@ -139,6 +139,10 @@ write_version
 apply_token
 check_remote
 
+# Контрольная сумма самого скрипта: если обновление принесло новую версию
+# апдейтера, перезапускаем себя, иначе правки применятся только после ребута.
+SELF_SUM="$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)"
+
 tick=0
 while true; do
   apply_token
@@ -154,6 +158,9 @@ while true; do
       if $DC ${CF[@]+"${CF[@]}"} up -d --build >> update/updater.log 2>&1; then
         write_version
         set_status "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')"
+        if [ -n "$SELF_SUM" ] && [ "$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)" != "$SELF_SUM" ]; then
+          exec /usr/bin/env bash "$0"   # апдейтер обновил сам себя
+        fi
       else
         set_status "Ошибка пересборки (см. update/updater.log)"
       fi

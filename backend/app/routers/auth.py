@@ -49,10 +49,18 @@ def logout(response: Response):
 
 @router.post("/telegram/request")
 def telegram_request():
-    if not telegram.issue_login_code():
+    result = telegram.issue_login_code()
+    if result == "not_configured":
         raise HTTPException(
             400,
             "Вход через Telegram не настроен: задайте токен бота и chat_id и включите его в «Настройках».",
+        )
+    if result != "ok":
+        raise HTTPException(
+            502,
+            "Код не отправлен: бот не смог связаться с Telegram. Проверьте токен, а если "
+            "api.telegram.org заблокирован у провайдера — поднимите туннель "
+            "(docker-compose.xray.yml, TELEGRAM_PROXY).",
         )
     return {"ok": True}
 

@@ -92,23 +92,29 @@ def notify(text: str) -> None:
 
 
 # ---------- Вход в панель через Telegram ----------
-def issue_login_code() -> bool:
+def issue_login_code() -> str:
     """Генерирует код и шлёт его во все настроенные чаты.
-    Код запоминается, только если доставлен хотя бы в один чат."""
+
+    Возвращает «ok» | «not_configured» | «send_failed» — вызывающему нужно
+    различать «не настроено» и «настроено, но бот недоступен» (например,
+    api.telegram.org заблокирован и не поднят туннель).
+    Код запоминается, только если доставлен хотя бы в один чат.
+    """
     import secrets
 
     token, chat_ids, enabled = _settings()
     if not (token and chat_ids and enabled):
-        return False
+        return "not_configured"
     code = f"{secrets.randbelow(1000000):06d}"
     text = f"Код для входа в панель Video Poster: {code}\nДействует 5 минут."
     delivered = False
     for cid in chat_ids:
         if send_message(token, cid, text):
             delivered = True
-    if delivered:
-        _login_codes[code] = time.time() + 300  # 5 минут
-    return delivered
+    if not delivered:
+        return "send_failed"
+    _login_codes[code] = time.time() + 300  # 5 минут
+    return "ok"
 
 
 def check_login_code(code: str) -> bool:

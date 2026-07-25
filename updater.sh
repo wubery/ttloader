@@ -16,6 +16,15 @@ cd "$(dirname "$0")"
 DC="docker compose"
 docker compose version >/dev/null 2>&1 || DC="docker-compose"
 
+# Если поднят xray-туннель для Telegram, пересобирать надо С override-файлом,
+# иначе после обновления backend теряет TELEGRAM_PROXY и бот «замолкает».
+# Уважаем COMPOSE_FILE, если он задан руками (в окружении или в .env).
+CF=()
+if [ -z "${COMPOSE_FILE:-}" ] && ! grep -qs '^COMPOSE_FILE=' .env \
+   && [ -f xray/config.json ] && [ -f docker-compose.xray.yml ]; then
+  CF=(-f docker-compose.yml -f docker-compose.xray.yml)
+fi
+
 mkdir -p update 2>/dev/null || true
 
 # Если каталог update/ создал docker (тогда он root:root), а апдейтер запущен от
@@ -141,7 +150,8 @@ while true; do
     printf '%s\n' "$pull_out" >> update/updater.log
     if [ "$pull_rc" -eq 0 ]; then
       set_status "Пересборка контейнеров…"
-      if $DC up -d --build >> update/updater.log 2>&1; then
+      # ${CF[@]+…} — чтобы пустой массив не спотыкался о set -u на старом bash
+      if $DC ${CF[@]+"${CF[@]}"} up -d --build >> update/updater.log 2>&1; then
         write_version
         set_status "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')"
       else

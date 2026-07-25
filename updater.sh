@@ -99,6 +99,18 @@ apply_token() {
   fi
 }
 
+# git pull, работающий и когда у ветки не настроен upstream
+do_pull() {
+  local up br
+  up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  if [ -n "$up" ]; then
+    git pull --ff-only
+  else
+    br="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+    git pull --ff-only origin "$br"
+  fi
+}
+
 ensure_git_safe
 write_version
 apply_token
@@ -111,7 +123,9 @@ while true; do
   if [ -f update/requested ]; then
     rm -f update/requested
     echo "Обновление: git pull…" > update/status
-    if git pull --ff-only >> update/updater.log 2>&1; then
+    pull_out="$(do_pull 2>&1)"; pull_rc=$?
+    printf '%s\n' "$pull_out" >> update/updater.log
+    if [ "$pull_rc" -eq 0 ]; then
       echo "Пересборка контейнеров…" > update/status
       if $DC up -d --build >> update/updater.log 2>&1; then
         write_version
@@ -124,7 +138,9 @@ while true; do
       if [ "$(cat update/git_status 2>/dev/null)" = "auth_required" ]; then
         echo "Нет доступа к репозиторию (приватный?) — задайте токен GitHub в поле ниже." > update/status
       else
-        echo "Ошибка git pull (см. update/updater.log)" > update/status
+        # показываем в панели саму причину, а не только «см. лог»
+        reason="$(printf '%s' "$pull_out" | grep -viE '^\s*$' | tail -1 | cut -c1-180)"
+        echo "Ошибка git pull: ${reason:-см. update/updater.log}" > update/status
       fi
     fi
     check_remote

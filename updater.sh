@@ -138,9 +138,16 @@ while true; do
       if [ "$(cat update/git_status 2>/dev/null)" = "auth_required" ]; then
         echo "Нет доступа к репозиторию (приватный?) — задайте токен GitHub в поле ниже." > update/status
       else
-        # показываем в панели саму причину, а не только «см. лог»
-        reason="$(printf '%s' "$pull_out" | grep -viE '^\s*$' | tail -1 | cut -c1-180)"
-        echo "Ошибка git pull: ${reason:-см. update/updater.log}" > update/status
+        # показываем в панели саму причину, а не только «см. лог».
+        # Строки error:/fatal: важнее последней строки: stdout и stderr в логе
+        # перемешиваются из-за буферизации, и «полезная» строка не всегда последняя.
+        reason="$(printf '%s' "$pull_out" | grep -m1 -E '^(error|fatal):' || true)"
+        [ -n "$reason" ] || reason="$(printf '%s' "$pull_out" | grep -vE '^\s*$' | tail -1)"
+        case "$pull_out" in
+          *"local changes"*|*"локальные изменения"*)
+            reason="$reason (в каталоге проекта есть правки руками — отмените их: git checkout -- .)" ;;
+        esac
+        echo "Ошибка git pull: $(printf '%s' "${reason:-см. update/updater.log}" | cut -c1-220)" > update/status
       fi
     fi
     check_remote

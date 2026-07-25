@@ -56,6 +56,31 @@ export interface Banner {
   created_at: string;
 }
 
+/** Слой-баннер: ссылается на баннер по id, позиция/движение — доли кадра. */
+export interface BannerOverlay {
+  type: "banner";
+  banner_id: number;
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+  motion: Motion;
+  motion_speed: number;
+}
+
+/** Текстовый слой: вжигается в видео через ffmpeg drawtext. */
+export interface TextOverlayData {
+  type: "text";
+  text: string;
+  x: number;
+  y: number;
+  font_size: number;   // доля высоты кадра (0..1) либо пиксели (>1)
+  color: string;
+  opacity: number;
+}
+
+export type Overlay = BannerOverlay | TextOverlayData;
+
 export interface Job {
   id: number;
   account_id: number;
@@ -65,6 +90,7 @@ export interface Job {
   banner_x: number | null;
   banner_y: number | null;
   banner_scale: number | null;
+  overlays: string | null;   // JSON-строка со слоями (как хранит бэкенд)
   status: JobStatus;
   scheduled_at: string | null;
   output_filename: string | null;
@@ -204,6 +230,7 @@ export const api = {
     banner_y?: number | null;
     banner_scale?: number | null;
     scheduled_at?: string | null;
+    overlays?: Overlay[] | null;
   }) =>
     fetch("/api/jobs", {
       method: "POST",

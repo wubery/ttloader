@@ -5,6 +5,7 @@ Playwright sync API нельзя запускать внутри работаю�
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 
@@ -18,6 +19,47 @@ from .uploaders import get_uploader, parse_proxy
 def _append_log(job: Job, msg: str) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
     job.log = (job.log or "") + f"[{stamp}] {msg}\n"
+
+
+def _parse_overlays(job: Job, db) -> list[dict]:
+    """Разбирает job.overlays (JSON от редактора) в список слоёв для ffmpeg.
+
+    Фронт присылает баннеры по banner_id — здесь подставляем реальные пути к файлам
+    и тип (картинка/видео). Некорректные слои молча пропускаем."""
+    raw = getattr(job, "overlays", None)
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+
+    out: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        kind = (it.get("type") or "banner").lower()
+        if kind == "text":
+            out.append(it)
+            continue
+        b = db.get(Banner, it.get("banner_id")) if it.get("banner_id") else None
+        if b is None:
+            continue
+        layer = dict(it)
+        layer["type"] = "banner"
+        layer["path"] = os.path.join(settings.banners_dir, b.filename)
+        layer["is_video"] = (b.type == BannerType.video)
+        # если фронт не передал параметры — берём сохранённые у баннера
+        layer.setdefault("x", b.x)
+        layer.setdefault("y", b.y)
+        layer.setdefault("scale", b.scale)
+        layer.setdefault("opacity", b.opacity)
+        layer.setdefault("motion", getattr(b, "motion", "none") or "none")
+        layer.setdefault("motion_speed", getattr(b, "motion_speed", 1.0) or 1.0)
+        out.append(layer)
+    return out
 
 
 def run_job(job_id: int) -> None:
@@ -34,8 +76,35 @@ def run_job(job_id: int) -> None:
         video_path = os.path.join(settings.videos_dir, video.filename)
         source_path = video_path
 
+        # 0) Слои редактора (несколько баннеров + текст) — приоритетнее одиночного баннера
+        overlays = _parse_overlays(job, db)
+
+        if overlays:
+            job.status = JobStatus.rendering
+            _append_log(job, f"Накладываю слои ({len(overlays)}) через ffmpeg…")
+            db.commit()
+            out_name = f"job{job.id}_{int(datetime.now().timestamp())}.mp4"
+            out_path = os.path.join(settings.output_dir, out_name)
+            try:
+                media.render_with_overlays(
+                    video_path=video_path,
+                    overlays=overlays,
+                    output_path=out_path,
+                    uniqueize=bool(getattr(account, "uniqueize", True)),
+                )
+            except media.MediaError as e:
+                job.status = JobStatus.failed
+                job.error = str(e)
+                _append_log(job, f"Ошибка ffmpeg: {e}")
+                db.commit()
+                return
+            job.output_filename = out_name
+            source_path = out_path
+            _append_log(job, "Слои наложены.")
+            db.commit()
+
         # 1) Наложение баннера (если задан)
-        if banner is not None:
+        elif banner is not None:
             job.status = JobStatus.rendering
             _append_log(job, "Накладываю баннер через ffmpeg…")
             db.commit()

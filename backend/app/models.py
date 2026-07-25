@@ -128,6 +128,9 @@ class Job(Base):
     banner_x: Mapped[float | None] = mapped_column(Float, default=None)
     banner_y: Mapped[float | None] = mapped_column(Float, default=None)
     banner_scale: Mapped[float | None] = mapped_column(Float, default=None)
+    # Слои редактора (JSON-массив): несколько баннеров и текстов, вжигаются в видео.
+    # Если задано — используется вместо одиночного banner_id. Формат см. media.render_with_overlays.
+    overlays: Mapped[str | None] = mapped_column(Text, default=None)
 
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.pending)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)

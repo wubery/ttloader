@@ -8,6 +8,7 @@ from ..db import get_db
 from ..schemas import SettingsOut, SettingsUpdate
 from ..services.appsettings import get_settings_row
 from ..services.security import hash_password
+from ..services.telegram import parse_chat_ids
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -29,7 +30,9 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
     if payload.tg_bot_token is not None:
         row.tg_bot_token = payload.tg_bot_token or None
     if payload.tg_chat_id is not None:
-        row.tg_chat_id = payload.tg_chat_id or None
+        # Может быть несколько ID — нормализуем в «id, id» (лишние пробелы/дубли убираем)
+        ids = parse_chat_ids(payload.tg_chat_id)
+        row.tg_chat_id = ", ".join(ids) if ids else None
     if payload.tg_login_enabled is not None:
         row.tg_login_enabled = payload.tg_login_enabled
     if payload.new_password:

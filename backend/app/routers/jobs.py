@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,6 +49,8 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
         banner_x=payload.banner_x,
         banner_y=payload.banner_y,
         banner_scale=payload.banner_scale,
+        # слои редактора храним JSON-строкой
+        overlays=json.dumps(payload.overlays, ensure_ascii=False) if payload.overlays else None,
         scheduled_at=payload.scheduled_at,
         status=JobStatus.pending,
     )

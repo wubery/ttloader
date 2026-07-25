@@ -146,6 +146,9 @@ class JobCreate(BaseModel):
     banner_y: float | None = None
     banner_scale: float | None = None
     scheduled_at: datetime | None = None
+    # Слои редактора: несколько баннеров и текстов. Если заданы — имеют приоритет
+    # над одиночным banner_id (см. services/media.render_with_overlays).
+    overlays: list[dict] | None = None
 
 
 class JobOut(BaseModel):
@@ -159,6 +162,7 @@ class JobOut(BaseModel):
     banner_x: float | None
     banner_y: float | None
     banner_scale: float | None
+    overlays: str | None      # JSON-строка со слоями (как хранится в БД)
     status: JobStatus
     scheduled_at: datetime | None
     output_filename: str | None

@@ -25,6 +25,28 @@ def _read(name: str, default: str = "") -> str:
         return default
 
 
+def _chown_to_dir_owner(path: str) -> None:
+    """Отдать файл владельцу каталога /update.
+
+    Контейнер пишет от root, а хостовый updater.sh обычно работает от обычного
+    пользователя: без этого он не сможет ни прочитать токен, ни перезаписать статус.
+    """
+    try:
+        st = os.stat(UPDATE_DIR)
+        os.chown(path, st.st_uid, st.st_gid)
+    except (OSError, AttributeError):  # не root или Windows — оставляем как есть
+        pass
+
+
+def _write(name: str, content: str, mode: int = 0o644) -> None:
+    path = os.path.join(UPDATE_DIR, name)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.chmod(path, mode)  # файл мог существовать с другими правами
+    _chown_to_dir_owner(path)
+
+
 @router.get("/version")
 def version():
     return {
@@ -52,19 +74,8 @@ def set_git_token(payload: GitTokenIn):
         return {"ok": False, "error": "Токен выглядит некорректно (пусто или есть пробелы)."}
     if not os.path.isdir(UPDATE_DIR):
         return {"ok": False, "error": "Каталог обновления недоступен (updater не установлен)."}
-    path = os.path.join(UPDATE_DIR, "git_token")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(tok)
-    # Контейнер пишет от root, а updater.sh на хосте может работать от обычного
-    # пользователя — отдаём файл владельцу каталога, иначе токен ему не прочитать.
-    try:
-        st = os.stat(UPDATE_DIR)
-        os.chown(path, st.st_uid, st.st_gid)
-    except (OSError, AttributeError):  # не root или Windows — оставляем как есть
-        pass
-    with open(os.path.join(UPDATE_DIR, "status"), "w", encoding="utf-8") as f:
-        f.write("Токен передан апдейтеру, применяется…")
+    _write("git_token", tok, 0o600)
+    _write("status", "Токен передан апдейтеру, применяется…")
     return {"ok": True}
 
 
@@ -73,8 +84,6 @@ def request_update():
     """Ставит флаг обновления; хостовый updater подхватит его и сделает git pull + rebuild."""
     if not os.path.isdir(UPDATE_DIR):
         return {"ok": False, "error": "Каталог обновления недоступен (updater не установлен)."}
-    with open(os.path.join(UPDATE_DIR, "requested"), "w", encoding="utf-8") as f:
-        f.write(str(int(time.time())))
-    with open(os.path.join(UPDATE_DIR, "status"), "w", encoding="utf-8") as f:
-        f.write("Запрошено обновление…")
+    _write("requested", str(int(time.time())))
+    _write("status", "Запрошено обновление…")
     return {"ok": True}

@@ -29,6 +29,16 @@ if ! ( : > update/.wtest ) 2>/dev/null; then
 fi
 rm -f update/.wtest
 
+# Статус пишем через временный файл + mv: сам update/status мог быть создан
+# контейнером от root, и тогда перезапись «на месте» упирается в права.
+set_status() {
+  local tmp
+  tmp="$(mktemp update/.status.XXXXXX)" || return 0
+  echo "$1" > "$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" update/status
+}
+
 CRED_FILE="$(pwd)/.git-credentials"
 # Иначе git при отсутствии токена вешается в ожидании ввода логина.
 export GIT_TERMINAL_PROMPT=0
@@ -73,7 +83,7 @@ apply_token() {
   [ -f update/git_token ] || return 0
   local tok base url stripped
   if [ ! -r update/git_token ]; then
-    echo "Токен получен, но апдейтер не может прочитать файл update/git_token (он создан контейнером от root, а updater.sh запущен от $(id -un 2>/dev/null)). Запустите апдейтер через systemd (vp-updater) или от root." > update/status
+    set_status "Токен получен, но апдейтер не может прочитать файл update/git_token (он создан контейнером от root, а updater.sh запущен от $(id -un 2>/dev/null)). Запустите апдейтер через systemd (vp-updater) или от root."
     return 0
   fi
   tok="$(tr -d ' \t\r\n' < update/git_token)"
@@ -90,12 +100,12 @@ apply_token() {
   stripped="$(printf '%s' "$url" | sed -E 's#^(https?://)[^@/]*@#\1#')"
   if [ -n "$url" ] && [ "$url" != "$stripped" ]; then git remote set-url origin "$stripped"; fi
 
-  echo "Токен GitHub сохранён, проверяю доступ…" > update/status
+  set_status "Токен GitHub сохранён, проверяю доступ…"
   check_remote
   if [ "$(cat update/git_status 2>/dev/null)" = "ok" ]; then
-    echo "Токен GitHub принят — доступ к репозиторию есть." > update/status
+    set_status "Токен GitHub принят — доступ к репозиторию есть."
   else
-    echo "Токен не подошёл: репозиторий недоступен. Проверьте права токена (Contents: Read) и что он выдан на нужный репозиторий." > update/status
+    set_status "Токен не подошёл: репозиторий недоступен. Проверьте права токена (Contents: Read) и что он выдан на нужный репозиторий."
   fi
 }
 
@@ -122,21 +132,21 @@ while true; do
 
   if [ -f update/requested ]; then
     rm -f update/requested
-    echo "Обновление: git pull…" > update/status
+    set_status "Обновление: git pull…"
     pull_out="$(do_pull 2>&1)"; pull_rc=$?
     printf '%s\n' "$pull_out" >> update/updater.log
     if [ "$pull_rc" -eq 0 ]; then
-      echo "Пересборка контейнеров…" > update/status
+      set_status "Пересборка контейнеров…"
       if $DC up -d --build >> update/updater.log 2>&1; then
         write_version
-        echo "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')" > update/status
+        set_status "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')"
       else
-        echo "Ошибка пересборки (см. update/updater.log)" > update/status
+        set_status "Ошибка пересборки (см. update/updater.log)"
       fi
     else
       check_remote
       if [ "$(cat update/git_status 2>/dev/null)" = "auth_required" ]; then
-        echo "Нет доступа к репозиторию (приватный?) — задайте токен GitHub в поле ниже." > update/status
+        set_status "Нет доступа к репозиторию (приватный?) — задайте токен GitHub в поле ниже."
       else
         # показываем в панели саму причину, а не только «см. лог».
         # Строки error:/fatal: важнее последней строки: stdout и stderr в логе
@@ -147,7 +157,7 @@ while true; do
           *"local changes"*|*"локальные изменения"*)
             reason="$reason (в каталоге проекта есть правки руками — отмените их: git checkout -- .)" ;;
         esac
-        echo "Ошибка git pull: $(printf '%s' "${reason:-см. update/updater.log}" | cut -c1-220)" > update/status
+        set_status "Ошибка git pull: $(printf '%s' "${reason:-см. update/updater.log}" | cut -c1-220)"
       fi
     fi
     check_remote

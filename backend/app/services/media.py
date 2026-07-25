@@ -10,6 +10,7 @@ import json
 import os
 import random
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass
 
@@ -166,12 +167,12 @@ def render_with_banner(
     return output_path
 
 
-def _drawtext_escape(text: str) -> str:
-    """Экранирует текст для фильтра drawtext: \\ : ' % и переводы строк."""
-    out = text.replace("\\", r"\\\\")
-    out = out.replace(":", r"\:").replace("'", r"\'").replace("%", r"\%")
-    out = out.replace("\n", " ")
-    return out
+def _norm_color(c: str | None) -> str:
+    """#RRGGBB → 0xRRGGBB (в filtergraph надёжнее); мусор → белый."""
+    s = (c or "").strip().lstrip("#")
+    if len(s) == 6 and all(ch in "0123456789abcdefABCDEF" for ch in s):
+        return f"0x{s.lower()}"
+    return "white"
 
 
 def _find_font() -> str | None:
@@ -208,7 +209,10 @@ def render_with_overlays(
     font = _find_font()
 
     def timing(ov: dict) -> str:
-        """:enable='between(t,start,end)' — если слой ограничен по времени."""
+        """:enable=between(t,start,end) — ограничение слоя по времени.
+
+        Запятые внутри выражения экранируем обратным слэшем: в filtergraph запятая
+        разделяет фильтры, а кавычки в этой позиции ffmpeg не принимает."""
         start, end = ov.get("start"), ov.get("end")
         if start is None and end is None:
             return ""
@@ -216,13 +220,14 @@ def render_with_overlays(
         e = float(end) if end is not None else max(s, info.duration or s)
         if e <= s:
             return ""
-        return f":enable='between(t,{s:.3f},{e:.3f})'"
+        return rf":enable=between(t\,{s:.3f}\,{e:.3f})"
 
     cmd: list[str] = [settings.ffmpeg_bin, "-y", "-i", video_path]
     chains: list[str] = []
     cur = "[0:v]"          # текущая метка видеопотока
     inp = 1                # индекс следующего входного файла
     step = 0
+    tmp_texts: list[str] = []   # временные файлы с текстом (удаляем в finally)
 
     for ov in overlays:
         kind = (ov.get("type") or "banner").lower()
@@ -268,18 +273,27 @@ def render_with_overlays(
             fs = float(ov.get("font_size", 0.06) or 0.06)
             # доля высоты кадра либо готовые пиксели
             px = max(8, round(fs * info.height)) if fs <= 1 else max(8, round(fs))
-            color = str(ov.get("color") or "#ffffff")
             opacity = float(ov.get("opacity", 1.0) or 1.0)
             x = float(ov.get("x", 0.5) or 0.0)
             y = float(ov.get("y", 0.5) or 0.0)
 
+            # Текст передаём ФАЙЛОМ: так не нужно экранировать кавычки/двоеточия/%,
+            # которые иначе ломают filtergraph (кириллица и апострофы включительно).
+            fd, tpath = tempfile.mkstemp(prefix="vptext_", suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(raw.replace("\n", " "))
+            tmp_texts.append(tpath)
+
             args = [
-                f"text='{_drawtext_escape(raw)}'",
+                f"textfile='{tpath}'",
+                # expansion=none обязателен: иначе ffmpeg трактует % как подстановку
+                # (%{...}) и текст с процентами не рисуется вообще.
+                "expansion=none",
                 f"x=(w*{x:.6f})",
                 f"y=(h*{y:.6f})",
                 f"fontsize={px}",
-                f"fontcolor={color}@{max(0.0, min(1.0, opacity)):.3f}",
-                # мягкая подложка-обводка, чтобы текст читался на любом фоне
+                f"fontcolor={_norm_color(ov.get('color'))}@{max(0.0, min(1.0, opacity)):.3f}",
+                # мягкая обводка, чтобы текст читался на любом фоне
                 "borderw=2",
                 "bordercolor=black@0.45",
             ]
@@ -290,21 +304,28 @@ def render_with_overlays(
             cur = out_lbl
             step += 1
 
-    if not chains:
-        # нечего накладывать — просто уникализируем (или копируем)
-        return render_uniqueize(video_path, output_path) if uniqueize else _copy_reencode(video_path, output_path)
+    try:
+        if not chains:
+            # нечего накладывать — просто уникализируем (или копируем)
+            return render_uniqueize(video_path, output_path) if uniqueize else _copy_reencode(video_path, output_path)
 
-    if uniqueize:
-        chains.append(f"{cur}{_uniq_vf(info.width, info.height)}[vout]")
-        cur = "[vout]"
+        if uniqueize:
+            chains.append(f"{cur}{_uniq_vf(info.width, info.height)}[vout]")
+            cur = "[vout]"
 
-    cmd += ["-filter_complex", ";".join(chains), "-map", cur, "-map", "0:a?"]
-    cmd += _encode_args()
-    if uniqueize:
-        cmd += _uniq_metadata_args()
-    cmd += [output_path]
-    _run(cmd)
-    return output_path
+        cmd += ["-filter_complex", ";".join(chains), "-map", cur, "-map", "0:a?"]
+        cmd += _encode_args()
+        if uniqueize:
+            cmd += _uniq_metadata_args()
+        cmd += [output_path]
+        _run(cmd)
+        return output_path
+    finally:
+        for p in tmp_texts:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def _copy_reencode(video_path: str, output_path: str) -> str:

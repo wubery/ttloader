@@ -56,12 +56,14 @@ def telegram_request():
             "Вход через Telegram не настроен: задайте токен бота и chat_id и включите его в «Настройках».",
         )
     if result != "ok":
-        raise HTTPException(
-            502,
-            "Код не отправлен: бот не смог связаться с Telegram. Проверьте токен, а если "
-            "api.telegram.org заблокирован у провайдера — поднимите туннель "
-            "(docker-compose.xray.yml, TELEGRAM_PROXY).",
+        detail = result.split(":", 1)[1].strip() if ":" in result else ""
+        hint = (
+            "откройте чат с ботом и нажмите Start — писать первым бот не может"
+            if "chat not found" in detail or "can't initiate" in detail
+            else "проверьте токен; если api.telegram.org заблокирован у провайдера — "
+            "поднимите туннель (docker-compose.xray.yml, TELEGRAM_PROXY)"
         )
+        raise HTTPException(502, f"Код не отправлен ({detail or 'нет связи с Telegram'}): {hint}.")
     return {"ok": True}
 
 

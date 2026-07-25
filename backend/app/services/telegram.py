@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -45,8 +46,16 @@ def _opener() -> urllib.request.OpenerDirector:
 def _api(method: str, token: str, params: dict, timeout: int = 30) -> dict:
     data = urllib.parse.urlencode(params).encode()
     url = f"{_API}/bot{token}/{method}"
-    with _opener().open(urllib.request.Request(url, data=data), timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    try:
+        with _opener().open(urllib.request.Request(url, data=data), timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        # У Telegram даже в 4xx есть тело с description («chat not found» и т.п.) —
+        # без него ошибка выглядела просто как «HTTP Error 400».
+        try:
+            return json.loads(e.read().decode())
+        except Exception:  # noqa: BLE001
+            raise e from None
 
 
 def parse_chat_ids(raw: str | None) -> list[str]:
@@ -74,29 +83,38 @@ def _settings() -> tuple[str | None, list[str], bool]:
         db.close()
 
 
-def send_message(token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> bool:
-    """Отправка сообщения с повторами.
+def send_message_detail(
+    token: str, chat_id: str, text: str, reply_markup: dict | None = None
+) -> tuple[bool, str]:
+    """Отправка сообщения с повторами. Возвращает (успех, причина отказа).
 
     Через туннель (VLESS/прокси) соединение периодически рвётся по таймауту:
-    без повтора уведомление молча теряется. Ошибку пишем в лог, а не глотаем.
+    без повтора уведомление молча теряется. Причину возвращаем и пишем в лог —
+    она нужна в интерфейсе («chat not found», если боту не нажали Start).
     """
     params: dict = {"chat_id": chat_id, "text": text}
     if reply_markup:
         params["reply_markup"] = json.dumps(reply_markup)
-    last: Exception | None = None
+    last = ""
     for attempt in range(3):
         try:
             r = _api("sendMessage", token, params, timeout=20)
             if r.get("ok"):
-                return True
-            log.warning("Telegram отклонил сообщение в чат %s: %s", chat_id, r.get("description"))
-            return False  # ответ получен, но Telegram отказал — повтор не поможет
+                return True, ""
+            # ответ получен, но Telegram отказал — повтор не поможет
+            desc = str(r.get("description") or "Telegram отклонил сообщение")
+            log.warning("Telegram отклонил сообщение в чат %s: %s", chat_id, desc)
+            return False, desc
         except Exception as e:  # noqa: BLE001
-            last = e
+            last = f"{type(e).__name__}: {e}"
             if attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
     log.warning("Не удалось отправить сообщение в чат %s: %s", chat_id, last)
-    return False
+    return False, last
+
+
+def send_message(token: str, chat_id: str, text: str, reply_markup: dict | None = None) -> bool:
+    return send_message_detail(token, chat_id, text, reply_markup)[0]
 
 
 def notify(text: str) -> None:
@@ -112,9 +130,9 @@ def notify(text: str) -> None:
 def issue_login_code() -> str:
     """Генерирует код и шлёт его во все настроенные чаты.
 
-    Возвращает «ok» | «not_configured» | «send_failed» — вызывающему нужно
-    различать «не настроено» и «настроено, но бот недоступен» (например,
-    api.telegram.org заблокирован и не поднят туннель).
+    Возвращает «ok» | «not_configured» | «send_failed: причина» — вызывающему нужно
+    различать «не настроено» и «настроено, но не доставлено» (боту не нажали Start,
+    api.telegram.org заблокирован и не поднят туннель, неверный токен).
     Код запоминается, только если доставлен хотя бы в один чат.
     """
     import secrets
@@ -125,11 +143,15 @@ def issue_login_code() -> str:
     code = f"{secrets.randbelow(1000000):06d}"
     text = f"Код для входа в панель Video Poster: {code}\nДействует 5 минут."
     delivered = False
+    reasons: list[str] = []
     for cid in chat_ids:
-        if send_message(token, cid, text):
+        ok, why = send_message_detail(token, cid, text)
+        if ok:
             delivered = True
+        elif why:
+            reasons.append(f"{cid}: {why}")
     if not delivered:
-        return "send_failed"
+        return "send_failed: " + "; ".join(reasons)
     _login_codes[code] = time.time() + 300  # 5 минут
     return "ok"
 

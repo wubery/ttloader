@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import os
+
 from .base import (
     STEALTH_INIT_JS,
     ProxyConfig,
@@ -28,6 +30,13 @@ UPLOAD_URL_FALLBACK = "https://www.tiktok.com/upload?lang=en"
 FILE_INPUT = 'input[type="file"]'
 CAPTION_EDITOR = 'div[contenteditable="true"], .public-DraftEditor-content'
 POST_BUTTON = 'button[data-e2e="post_video_button"], button:has-text("Post")'
+
+# Ответы этих эндпоинтов = реальное подтверждение публикации. Только по ним
+# считаем задачу успешной: клик по кнопке сам по себе ничего не доказывает.
+PUBLISH_API_HINTS = ("/aweme/v1/web/aweme/post", "/project/post", "/web/project/publish", "/upload/publish")
+
+MAX_UPLOAD_WAIT_MS = 10 * 60_000   # заливка большого видео через прокси идёт минутами
+MAX_PUBLISH_WAIT_MS = 90_000       # ожидание подтверждения после клика «Опубликовать»
 
 
 def upload_tiktok(
@@ -60,8 +69,17 @@ def upload_tiktok(
             context = browser.new_context(storage_state=load_storage_state(cookies_path), **stealth_context_kwargs())
             context.add_init_script(STEALTH_INIT_JS)
             page = context.new_page()
+
+            # Ответы API публикации — единственное надёжное доказательство, что пост ушёл.
+            publish_responses: list[tuple[int, str, str]] = []
+            page.on("response", lambda r: _remember_publish(r, publish_responses))
+
             _log("Открываю страницу загрузки TikTok…")
             page.goto(UPLOAD_URL, wait_until="load", timeout=60_000)
+
+            # Протухшие куки TikTok просто редиректит на /login. Раньше это не
+            # распознавалось: код 105с искал поле загрузки и жаловался на вёрстку.
+            _assert_logged_in(page)
 
             # Поле загрузки TikTok Studio появляется не сразу — ждём до 60с.
             _log("Жду появления поля загрузки (TikTok дорисовывает его не сразу)…")
@@ -69,6 +87,7 @@ def upload_tiktok(
             if file_input is None:
                 _log("На основной странице не нашлось — пробую классическую /upload…")
                 page.goto(UPLOAD_URL_FALLBACK, wait_until="load", timeout=60_000)
+                _assert_logged_in(page)
                 file_input = _find_file_input(page, timeout_ms=45_000, log=_log)
             if file_input is None:
                 raise UploadError(
@@ -98,26 +117,31 @@ def upload_tiktok(
                 except Exception as e:  # noqa: BLE001
                     _log(f"Не удалось ввести описание автоматически: {e}")
 
-            # Дожидаемся окончания загрузки видео на сервер перед публикацией
-            _log("Жду завершения обработки видео на сервере…")
-            page.wait_for_timeout(10_000)
+            # Ждём РЕАЛЬНОГО завершения заливки, а не фиксированные 10 секунд:
+            # через прокси большое видео льётся минутами, и клик по неактивной
+            # кнопке «Опубликовать» раньше молча ничего не делал.
+            _wait_upload_complete(page, log=_log, timeout_ms=MAX_UPLOAD_WAIT_MS)
 
             _log("Публикую…")
             # На случай, если диалог/обучающий оверлей появился/вернулся — убираем перед кликом.
             _dismiss_blocking_modal(page, log=_log, timeout_ms=4_000)
             _kill_overlays(page, log=_log)
-            post_btn = page.locator(POST_BUTTON).first
-            post_btn.wait_for(state="visible", timeout=30_000)
-            try:
-                post_btn.click(timeout=15_000)
-            except Exception:  # noqa: BLE001 — что-то ещё перехватило клик, убираем оверлеи и жмём принудительно
-                _kill_overlays(page, log=_log)
-                _dismiss_blocking_modal(page, log=_log, timeout_ms=3_000)
-                post_btn.click(force=True, timeout=15_000)
+            _click_post(page, log=_log)
 
-            page.wait_for_timeout(8_000)
-            _log("Готово: запрос на публикацию отправлен.")
-            return UploadResult(ok=True, url=None, log="\n".join(lines))
+            # Клик ничего не доказывает — ждём подтверждения от самого TikTok.
+            ok, detail = _wait_publish_confirmed(
+                page, publish_responses, log=_log, timeout_ms=MAX_PUBLISH_WAIT_MS
+            )
+            if not ok:
+                shot = _screenshot(page, "publish_unconfirmed", log=_log)
+                raise UploadError(
+                    f"TikTok не подтвердил публикацию: {detail}. Видео могло не уйти — "
+                    f"проверьте «Контент» в TikTok Studio."
+                    + (f" Скриншот: {shot}" if shot else "")
+                )
+
+            _log(f"Публикация подтверждена TikTok ({detail}).")
+            return UploadResult(ok=True, url=_find_posted_url(publish_responses), log="\n".join(lines))
         except UploadError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -125,6 +149,168 @@ def upload_tiktok(
             return UploadResult(ok=False, log="\n".join(lines), error=str(e))
         finally:
             browser.close()
+
+
+def _assert_logged_in(page) -> None:
+    """Ловит редирект на страницу входа — значит, куки протухли."""
+    url = (page.url or "").lower()
+    if "/login" in url or "/signup" in url:
+        raise UploadError(
+            "TikTok перекинул на страницу входа — куки аккаунта недействительны. "
+            "Переимпортируйте куки (снимать их нужно через тот же прокси: сессия привязана к IP)."
+        )
+
+
+def _remember_publish(response, sink: list) -> None:
+    """Складывает ответы эндпоинтов публикации — по ним проверяем факт поста."""
+    try:
+        url = response.url
+        if not any(h in url for h in PUBLISH_API_HINTS):
+            return
+        body = ""
+        try:
+            body = response.text()[:2000]
+        except Exception:  # noqa: BLE001 — тело может быть недоступно
+            pass
+        sink.append((response.status, url, body))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _upload_state(page) -> dict:
+    """Состояние страницы: активна ли кнопка публикации и виден ли прогресс заливки."""
+    try:
+        return page.evaluate(
+            """() => {
+                const btns = [...document.querySelectorAll('button')];
+                const post = btns.find(b => b.getAttribute('data-e2e') === 'post_video_button')
+                    || btns.find(b => /^(post|опубликовать|публиковать)$/i.test((b.innerText||'').trim()));
+                const body = document.body ? (document.body.innerText || '') : '';
+                const pct = body.match(/(\\d{1,3})\\s?%/);
+                return {
+                    hasPost: !!post,
+                    postEnabled: !!post && !post.disabled
+                        && post.getAttribute('aria-disabled') !== 'true'
+                        && !/disabled/i.test(post.className || ''),
+                    percent: pct ? parseInt(pct[1], 10) : null,
+                    uploading: /uploading|загрузка|загружается|processing|обработ/i.test(body),
+                    hasPreview: !!document.querySelector('video'),
+                };
+            }"""
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _wait_upload_complete(page, log=lambda m: None, timeout_ms: int = MAX_UPLOAD_WAIT_MS) -> None:
+    """Ждёт, пока видео дольётся и кнопка публикации станет активной.
+
+    Раньше здесь стояли фиксированные 10 секунд: при заливке через прокси этого
+    почти всегда мало, кнопка оставалась неактивной, а клик по ней ничего не делал.
+    """
+    log("Жду завершения заливки видео на серверы TikTok…")
+    waited = 0
+    step = 3_000
+    last_note = ""
+    while waited < timeout_ms:
+        st = _upload_state(page)
+        if st.get("postEnabled"):
+            log(f"Заливка завершена за {waited // 1000}с — кнопка публикации активна.")
+            return
+        note = f"{st.get('percent')}%" if st.get("percent") is not None else (
+            "идёт заливка" if st.get("uploading") else "жду готовности"
+        )
+        if note != last_note:
+            log(f"…{note} ({waited // 1000}с)")
+            last_note = note
+        page.wait_for_timeout(step)
+        waited += step
+    spent = f"{timeout_ms // 60_000} мин" if timeout_ms >= 60_000 else f"{timeout_ms // 1000}с"
+    raise UploadError(
+        f"Видео не долилось за {spent}: кнопка публикации так и не стала активной. "
+        "Обычно это медленный прокси или слишком большой файл."
+    )
+
+
+def _click_post(page, log=lambda m: None) -> None:
+    """Жмёт «Опубликовать», не подменяя неудачу принудительным кликом.
+
+    force=True обходит проверки Playwright и по неактивной кнопке просто ничего
+    не делает — раньше именно так «успешная» задача не публиковала ничего.
+    """
+    post_btn = page.locator(POST_BUTTON).first
+    post_btn.wait_for(state="visible", timeout=30_000)
+    for attempt in (1, 2, 3):
+        st = _upload_state(page)
+        if not st.get("postEnabled"):
+            log(f"Кнопка публикации неактивна (попытка {attempt}) — жду…")
+            page.wait_for_timeout(5_000)
+            continue
+        try:
+            post_btn.click(timeout=15_000)
+            log("Кнопка «Опубликовать» нажата.")
+            return
+        except Exception as e:  # noqa: BLE001 — клик перехвачен: чистим оверлеи и пробуем снова
+            log(f"Клик не прошёл ({type(e).__name__}) — убираю перекрытия и повторяю.")
+            _kill_overlays(page, log=log)
+            _dismiss_blocking_modal(page, log=log, timeout_ms=3_000)
+    raise UploadError(
+        "Не удалось нажать «Опубликовать»: кнопка осталась неактивной или её перекрывает "
+        "элемент TikTok."
+    )
+
+
+def _wait_publish_confirmed(page, responses: list, log=lambda m: None, timeout_ms: int = MAX_PUBLISH_WAIT_MS):
+    """Ждёт доказательства публикации: ответ API, уход со страницы загрузки или тост."""
+    waited = 0
+    step = 2_000
+    while waited < timeout_ms:
+        for status, url, body in list(responses):
+            if status == 200 and ('"status_code":0' in body or '"status_code": 0' in body or not body):
+                return True, f"ответ {url.split('?')[0]}"
+            if status == 200 and '"status_code"' in body:
+                return False, f"TikTok вернул ошибку в ответе: {body[:200]}"
+        try:
+            cur = (page.url or "").lower()
+            if "/upload" not in cur and ("/content" in cur or "/tiktokstudio" in cur):
+                return True, f"страница сменилась на {cur}"
+            done = page.evaluate(
+                """() => /видео опубликовано|ваше видео|posted|published|успешно/i
+                    .test(document.body ? document.body.innerText : '')"""
+            )
+            if done:
+                return True, "TikTok показал сообщение об успешной публикации"
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(step)
+        waited += step
+    return False, f"за {timeout_ms // 1000}с не пришло ни ответа API, ни перехода на «Контент»"
+
+
+def _find_posted_url(responses: list) -> str | None:
+    """Достаёт id опубликованного видео из ответа API, если он там есть."""
+    import re
+
+    for _status, _url, body in responses:
+        m = re.search(r'"(?:aweme_id|item_id|video_id)"\s*:\s*"?(\d{6,})"?', body or "")
+        if m:
+            return f"https://www.tiktok.com/video/{m.group(1)}"
+    return None
+
+
+def _screenshot(page, tag: str, log=lambda m: None) -> str | None:
+    """Скриншот в каталог данных — чтобы было что посмотреть при разборе."""
+    import time as _time
+
+    try:
+        from ...config import settings
+
+        path = os.path.join(settings.output_dir, f"tiktok_{tag}_{int(_time.time())}.png")
+        page.screenshot(path=path, full_page=False)
+        log(f"Сохранил скриншот страницы: {os.path.basename(path)}")
+        return os.path.basename(path)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) -> bool:
@@ -137,7 +323,9 @@ def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) 
     """
     from playwright.sync_api import Error as PWError
 
-    labels = ["Отмена", "Cancel", "Включить", "Enable", "Не сейчас", "Not now", "OK"]
+    # Порядок важен: сначала нейтральные ответы. «Включить» (Enable) — крайний
+    # случай: он что-то включает в аккаунте, поэтому жмём его последним и с меткой в логе.
+    labels = ["Отмена", "Cancel", "Не сейчас", "Not now", "OK", "Включить", "Enable"]
     waited = 0
     while waited < timeout_ms:
         for label in labels:

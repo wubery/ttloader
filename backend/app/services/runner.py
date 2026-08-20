@@ -165,8 +165,17 @@ def run_job(job_id: int) -> None:
         uploader = get_uploader(account.platform.value)
 
         def _live_log(m: str) -> None:
-            # промежуточные логи не коммитим часто — копим в память загрузчика
-            pass
+            """Пишем ход постинга сразу, а не пачкой в конце.
+
+            Раньше строки копились в загрузчике и добавлялись после его выхода —
+            все получали одинаковую метку времени, и по логу нельзя было понять,
+            где задача простояла минуты (например, на заливке видео).
+            """
+            try:
+                _append_log(job, m)
+                db.commit()
+            except Exception:  # noqa: BLE001 — лог не должен ронять постинг
+                db.rollback()
 
         result = uploader(
             video_path=source_path,
@@ -176,14 +185,12 @@ def run_job(job_id: int) -> None:
             headless=settings.headless,
             log=_live_log,
         )
-        if result.log:
-            for line in result.log.splitlines():
-                _append_log(job, line)
+        # result.log сюда не дописываем: те же строки уже легли через _live_log
 
         if result.ok:
             job.status = JobStatus.done
             job.posted_url = result.url
-            _append_log(job, "Задача выполнена успешно.")
+            _append_log(job, "Задача выполнена успешно." + (f" Ссылка: {result.url}" if result.url else ""))
         else:
             job.status = JobStatus.failed
             job.error = result.error or "Неизвестная ошибка постинга"

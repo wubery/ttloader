@@ -14,12 +14,19 @@ from ..schemas import (
     AccountCreate,
     AccountOut,
     AccountUpdate,
+    AutoLoginStateOut,
     LoginCodeIn,
     LoginCredentialsIn,
     LoginStageOut,
     LoginStatusOut,
+    MailCodeOut,
+    MailConnectOut,
+    MailConnectStateOut,
+    MailMessageOut,
     ProxyCheckOut,
 )
+from ..services import auto_login, mail
+from ..services.crypto import encrypt
 from ..services.login_session import LOGIN_URLS, login_manager
 from ..services.uploaders.base import (
     UploadError,
@@ -70,6 +77,31 @@ def list_accounts(db: Session = Depends(get_db)):
     return db.query(Account).order_by(Account.id.desc()).all()
 
 
+def _apply_credentials(acc: Account, payload) -> None:
+    """Переносит логин/пароль/почту из запроса в аккаунт, шифруя секреты.
+
+    Пустая строка означает «очистить», отсутствие поля (None) — «не трогать»:
+    иначе правка имени затирала бы сохранённый пароль.
+    """
+    if payload.tt_login is not None:
+        acc.tt_login = payload.tt_login.strip() or None
+    if payload.tt_password is not None:
+        acc.tt_password_enc = encrypt(payload.tt_password) if payload.tt_password else None
+    if payload.mail_address is not None:
+        acc.mail_address = payload.mail_address.strip() or None
+        acc.mail_kind = mail.detect_kind(acc.mail_address)
+        if acc.mail_kind == "imap" and not acc.mail_imap_host:
+            acc.mail_imap_host = mail.guess_imap_host(acc.mail_address)
+    if payload.mail_password is not None:
+        acc.mail_password_enc = encrypt(payload.mail_password) if payload.mail_password else None
+    if payload.mail_imap_host is not None:
+        acc.mail_imap_host = payload.mail_imap_host.strip() or None
+    if payload.mail_imap_port is not None:
+        acc.mail_imap_port = payload.mail_imap_port
+    if payload.auto_login is not None:
+        acc.auto_login = payload.auto_login
+
+
 @router.post("", response_model=AccountOut)
 def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
     if payload.proxy_url:
@@ -78,9 +110,18 @@ def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
     acc = Account(name=payload.name, platform=payload.platform, proxy_url=payload.proxy_url)
     if payload.uniqueize is not None:
         acc.uniqueize = payload.uniqueize
+    _apply_credentials(acc, payload)
     db.add(acc)
     db.commit()
     db.refresh(acc)
+
+    # Входим сразу, если есть чем: логин с паролем. Почта нужна для кода, но без неё
+    # вход тоже стартует — код можно ввести руками.
+    if payload.start_login and acc.has_tt_credentials and acc.platform.value in LOGIN_URLS:
+        try:
+            auto_login.start(acc.id)
+        except UploadError:
+            pass
     return acc
 
 
@@ -100,6 +141,7 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
         acc.active = payload.active
     if payload.uniqueize is not None:
         acc.uniqueize = payload.uniqueize
+    _apply_credentials(acc, payload)
     db.commit()
     db.refresh(acc)
     return acc
@@ -240,12 +282,101 @@ async def login_credentials(account_id: int, payload: LoginCredentialsIn, db: Se
     return _stage_out(result)
 
 
+# --- Автоматический вход ------------------------------------------------------
+@router.post("/{account_id}/login/auto", response_model=AutoLoginStateOut)
+def login_auto(account_id: int, db: Session = Depends(get_db)):
+    """Запускает автоматический вход: логин, пароль и код из почты — сами."""
+    acc = db.get(Account, account_id)
+    if acc is None:
+        raise HTTPException(404, "Аккаунт не найден")
+    if not acc.has_tt_credentials:
+        raise HTTPException(400, "У аккаунта не заданы логин и пароль — впишите их в профиле.")
+    if acc.platform.value not in LOGIN_URLS:
+        raise HTTPException(400, f"Вход для платформы {acc.platform.value} не поддержан")
+    try:
+        auto_login.start(acc.id)
+    except UploadError as e:
+        raise HTTPException(409, str(e))
+    return auto_login.get_state(acc.id)
+
+
+@router.get("/{account_id}/login/state", response_model=AutoLoginStateOut)
+def login_state(account_id: int):
+    return auto_login.get_state(account_id)
+
+
+# --- Почта --------------------------------------------------------------------
+@router.post("/{account_id}/mail/connect", response_model=MailConnectOut)
+def mail_connect(account_id: int, db: Session = Depends(get_db)):
+    """Стартует подключение ящика Microsoft: пользователь вводит код на microsoft.com."""
+    acc = _account_with_mail(account_id, db)
+    try:
+        return mail.start_device_code(acc, db)
+    except mail.MailError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/{account_id}/mail/connect/state", response_model=MailConnectStateOut)
+def mail_connect_state(account_id: int):
+    return mail.connect_state(account_id)
+
+
+@router.get("/{account_id}/mail", response_model=list[MailMessageOut])
+def mail_list(account_id: int, limit: int = 20, db: Session = Depends(get_db)):
+    acc = _account_with_mail(account_id, db)
+    try:
+        messages = mail.list_messages(acc, db, limit=limit)
+    except mail.MailError as e:
+        raise HTTPException(400, str(e))
+    return [
+        MailMessageOut(
+            id=m.id, sender=m.sender, subject=m.subject, received_at=m.received_at, preview=m.preview
+        )
+        for m in messages
+    ]
+
+
+@router.get("/{account_id}/mail/message/{msg_id:path}")
+def mail_body(account_id: int, msg_id: str, db: Session = Depends(get_db)):
+    acc = _account_with_mail(account_id, db)
+    try:
+        return {"body": mail.get_body(acc, db, msg_id)}
+    except mail.MailError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/{account_id}/mail/code", response_model=MailCodeOut)
+def mail_code(account_id: int, db: Session = Depends(get_db)):
+    """Ищет свежий код подтверждения TikTok в почте аккаунта."""
+    acc = _account_with_mail(account_id, db)
+    try:
+        code = mail.find_login_code(acc, db)
+    except mail.MailError as e:
+        raise HTTPException(400, str(e))
+    return MailCodeOut(code=code, message=None if code else "Свежих писем с кодом не нашлось.")
+
+
+def _account_with_mail(account_id: int, db: Session) -> Account:
+    acc = db.get(Account, account_id)
+    if acc is None:
+        raise HTTPException(404, "Аккаунт не найден")
+    if not acc.mail_address:
+        raise HTTPException(400, "У аккаунта не указана почта.")
+    return acc
+
+
 @router.post("/{account_id}/login/code", response_model=LoginStageOut)
 async def login_code(account_id: int, payload: LoginCodeIn, db: Session = Depends(get_db)):
     """Отправляет код с почты. При успехе сохраняет куки и закрывает сессию."""
     acc = db.get(Account, account_id)
     if acc is None:
         raise HTTPException(404, "Аккаунт не найден")
+
+    # Если идёт автоматический вход — код нужен ему, а не ручной сессии.
+    if auto_login.is_running(account_id):
+        auto_login.submit_manual_code(account_id, payload.code)
+        return LoginStageOut(stage="email_code", message="Код передан автоматическому входу.")
+
     try:
         result = await login_manager.submit_code(account_id, payload.code)
     except UploadError as e:

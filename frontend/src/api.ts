@@ -16,6 +16,54 @@ export interface Account {
   active: boolean;
   has_cookies: boolean;
   created_at: string;
+  // Автовход: пароли наружу не отдаются, только признаки
+  tt_login: string | null;
+  has_tt_credentials: boolean;
+  mail_address: string | null;
+  mail_kind: string | null;
+  mail_connected: boolean;
+  mail_connected_at: string | null;
+  auto_login: boolean;
+  last_login_at: string | null;
+  login_error: string | null;
+}
+
+/** Поля профиля, которые можно задать при создании и правке. */
+export interface AccountCredentials {
+  tt_login: string | null;
+  tt_password: string | null;
+  mail_address: string | null;
+  mail_password: string | null;
+  mail_imap_host: string | null;
+  mail_imap_port: number | null;
+  auto_login: boolean;
+}
+
+export interface AutoLoginState {
+  stage: "idle" | "starting" | "filling" | "waiting_code" | "submitting_code" | "done" | "captcha" | "error";
+  message: string | null;
+  screenshot: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface MailMessage {
+  id: string;
+  sender: string;
+  subject: string;
+  received_at: string | null;
+  preview: string;
+}
+
+export interface MailConnect {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+}
+
+export interface MailConnectState {
+  state: "idle" | "pending" | "done" | "error";
+  message: string | null;
 }
 
 export interface ProxyCheck {
@@ -132,6 +180,7 @@ export interface SettingsData {
   tg_bot_configured: boolean;
   tg_chat_id: string | null;
   tg_login_enabled: boolean;
+  ms_client_id: string | null;
 }
 
 export const api = {
@@ -163,7 +212,7 @@ export const api = {
 
   // settings
   getSettings: () => fetch("/api/settings").then((r) => j<SettingsData>(r)),
-  updateSettings: (b: Partial<{ tg_bot_token: string; tg_chat_id: string; tg_login_enabled: boolean; new_password: string }>) =>
+  updateSettings: (b: Partial<{ tg_bot_token: string; tg_chat_id: string; tg_login_enabled: boolean; new_password: string; ms_client_id: string }>) =>
     fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
@@ -171,13 +220,13 @@ export const api = {
 
   // accounts
   accounts: () => fetch("/api/accounts").then((r) => j<Account[]>(r)),
-  createAccount: (b: { name: string; platform: Platform; proxy_url?: string | null; uniqueize?: boolean }) =>
+  createAccount: (b: { name: string; platform: Platform; proxy_url?: string | null; uniqueize?: boolean } & Partial<AccountCredentials> & { start_login?: boolean }) =>
     fetch("/api/accounts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Account>(r)),
-  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean }>) =>
+  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean } & AccountCredentials>) =>
     fetch(`/api/accounts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -204,6 +253,23 @@ export const api = {
       body: JSON.stringify({ code }),
     }).then((r) => j<LoginStage>(r)),
   loginCancel: () => fetch(`/api/accounts/login/cancel`, { method: "POST" }).then((r) => j<any>(r)),
+
+  // автоматический вход: логин, пароль и код из почты — панель делает сама
+  loginAuto: (id: number) =>
+    fetch(`/api/accounts/${id}/login/auto`, { method: "POST" }).then((r) => j<AutoLoginState>(r)),
+  loginState: (id: number) => fetch(`/api/accounts/${id}/login/state`).then((r) => j<AutoLoginState>(r)),
+
+  // почта аккаунта
+  mailList: (id: number, limit = 20) =>
+    fetch(`/api/accounts/${id}/mail?limit=${limit}`).then((r) => j<MailMessage[]>(r)),
+  mailBody: (id: number, msgId: string) =>
+    fetch(`/api/accounts/${id}/mail/message/${encodeURIComponent(msgId)}`).then((r) => j<{ body: string }>(r)),
+  mailCode: (id: number) =>
+    fetch(`/api/accounts/${id}/mail/code`, { method: "POST" }).then((r) => j<{ code: string | null; message: string | null }>(r)),
+  mailConnect: (id: number) =>
+    fetch(`/api/accounts/${id}/mail/connect`, { method: "POST" }).then((r) => j<MailConnect>(r)),
+  mailConnectState: (id: number) =>
+    fetch(`/api/accounts/${id}/mail/connect/state`).then((r) => j<MailConnectState>(r)),
 
   // videos
   videos: () => fetch("/api/videos").then((r) => j<Video[]>(r)),

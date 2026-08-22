@@ -13,6 +13,16 @@ class AccountCreate(BaseModel):
     platform: Platform
     proxy_url: str | None = None
     uniqueize: bool | None = None
+    # Данные для автоматического входа (все необязательные)
+    tt_login: str | None = None
+    tt_password: str | None = None
+    mail_address: str | None = None
+    mail_password: str | None = None
+    mail_imap_host: str | None = None
+    mail_imap_port: int | None = None
+    auto_login: bool | None = None
+    # Запустить вход сразу после создания профиля
+    start_login: bool = True
 
 
 class AccountUpdate(BaseModel):
@@ -20,9 +30,18 @@ class AccountUpdate(BaseModel):
     proxy_url: str | None = None
     active: bool | None = None
     uniqueize: bool | None = None
+    tt_login: str | None = None
+    tt_password: str | None = None
+    mail_address: str | None = None
+    mail_password: str | None = None
+    mail_imap_host: str | None = None
+    mail_imap_port: int | None = None
+    auto_login: bool | None = None
 
 
 class AccountOut(BaseModel):
+    """Наружу отдаём только признаки наличия секретов, сами пароли и токены — никогда."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -36,6 +55,16 @@ class AccountOut(BaseModel):
     active: bool
     has_cookies: bool
     created_at: datetime
+    # Автовход
+    tt_login: str | None = None
+    has_tt_credentials: bool = False
+    mail_address: str | None = None
+    mail_kind: str | None = None
+    mail_connected: bool = False
+    mail_connected_at: datetime | None = None
+    auto_login: bool = True
+    last_login_at: datetime | None = None
+    login_error: str | None = None
 
 
 class ProxyCheckOut(BaseModel):
@@ -66,6 +95,45 @@ class LoginStatusOut(BaseModel):
     account_name: str | None = None
 
 
+class AutoLoginStateOut(BaseModel):
+    """Стадия автоматического входа — фронт опрашивает её раз в пару секунд."""
+
+    # idle | starting | filling | waiting_code | submitting_code | done | captcha | error
+    stage: str
+    message: str | None = None
+    screenshot: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+# ---------- Mail ----------
+class MailMessageOut(BaseModel):
+    id: str
+    sender: str
+    subject: str
+    received_at: datetime | None = None
+    preview: str = ""
+
+
+class MailCodeOut(BaseModel):
+    code: str | None = None
+    message: str | None = None
+
+
+class MailConnectOut(BaseModel):
+    """Device code flow: пользователь вводит код на странице Microsoft."""
+
+    user_code: str
+    verification_uri: str
+    expires_in: int
+
+
+class MailConnectStateOut(BaseModel):
+    # pending | done | error
+    state: str
+    message: str | None = None
+
+
 # ---------- Auth / Settings ----------
 class LoginIn(BaseModel):
     username: str
@@ -87,6 +155,7 @@ class SettingsOut(BaseModel):
     tg_bot_configured: bool
     tg_chat_id: str | None
     tg_login_enabled: bool
+    ms_client_id: str | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -94,6 +163,7 @@ class SettingsUpdate(BaseModel):
     tg_chat_id: str | None = None
     tg_login_enabled: bool | None = None
     new_password: str | None = None
+    ms_client_id: str | None = None   # Azure-приложение для чтения outlook-почты
 
 
 # ---------- Videos ----------

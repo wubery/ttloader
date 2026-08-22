@@ -90,12 +90,49 @@ def _check_proxies() -> None:
         db.close()
 
 
+def _check_sessions() -> None:
+    """Проверяет живость кук и перелогинивает аккаунты, у которых сессия умерла.
+
+    Проверка редкая (часы, не минуты): каждый вход — это запуск браузера и повод для
+    подозрений у TikTok.
+    """
+    from .services import auto_login
+    from .services.uploaders.base import cookies_alive
+
+    db = SessionLocal()
+    try:
+        accounts = (
+            db.query(Account)
+            .filter(Account.active.is_(True), Account.auto_login.is_(True))
+            .all()
+        )
+        for acc in accounts:
+            if not acc.has_tt_credentials or not acc.has_cookies:
+                continue
+            if auto_login.is_running(acc.id):
+                continue
+            try:
+                if cookies_alive(acc.platform.value, acc.cookies_path, acc.proxy_url):
+                    continue
+            except Exception:  # noqa: BLE001 — сеть/прокси мигнули: не перелогиниваемся зря
+                continue
+            try:
+                auto_login.start(acc.id)
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(_poll_due_jobs, "interval", seconds=60, id="poll_due_jobs",
                        replace_existing=True, max_instances=1)
     if settings.proxy_check_minutes and settings.proxy_check_minutes > 0:
         _scheduler.add_job(_check_proxies, "interval", minutes=settings.proxy_check_minutes,
                            id="check_proxies", replace_existing=True, max_instances=1)
+    if settings.session_check_hours and settings.session_check_hours > 0:
+        _scheduler.add_job(_check_sessions, "interval", hours=settings.session_check_hours,
+                           id="check_sessions", replace_existing=True, max_instances=1)
     _scheduler.start()
 
 

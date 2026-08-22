@@ -22,6 +22,8 @@ class AppSettings(Base):
     tg_bot_token: Mapped[str | None] = mapped_column(String(120), default=None)
     tg_chat_id: Mapped[str | None] = mapped_column(String(64), default=None)
     tg_login_enabled: Mapped[bool] = mapped_column(default=False)
+    # Azure-приложение для чтения outlook/hotmail: один client_id на все ящики
+    ms_client_id: Mapped[str | None] = mapped_column(String(120), default=None)
 
 
 class Platform(str, enum.Enum):
@@ -64,6 +66,24 @@ class Account(Base):
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    # --- Данные для автоматического входа -------------------------------------
+    # Пароли и токены хранятся зашифрованными (services/crypto.py), наружу не отдаются.
+    tt_login: Mapped[str | None] = mapped_column(String(190), default=None)
+    tt_password_enc: Mapped[str | None] = mapped_column(Text, default=None)
+    # Почта аккаунта: туда TikTok шлёт код подтверждения
+    mail_address: Mapped[str | None] = mapped_column(String(190), default=None)
+    mail_password_enc: Mapped[str | None] = mapped_column(Text, default=None)
+    # graph — Microsoft (outlook/hotmail/live) через OAuth; imap — обычный ящик по паролю
+    mail_kind: Mapped[str | None] = mapped_column(String(16), default=None)
+    mail_imap_host: Mapped[str | None] = mapped_column(String(190), default=None)
+    mail_imap_port: Mapped[int | None] = mapped_column(Integer, default=None)
+    mail_refresh_token_enc: Mapped[str | None] = mapped_column(Text, default=None)
+    mail_connected_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Участвует ли аккаунт в автоперелогине при протухших куках
+    auto_login: Mapped[bool] = mapped_column(default=True, server_default="1")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    login_error: Mapped[str | None] = mapped_column(Text, default=None)
+
     jobs: Mapped[list[Job]] = relationship(back_populates="account", cascade="all, delete-orphan")
 
     @property
@@ -71,6 +91,19 @@ class Account(Base):
         import os
 
         return bool(self.cookies_path and os.path.exists(self.cookies_path))
+
+    @property
+    def has_tt_credentials(self) -> bool:
+        return bool(self.tt_login and self.tt_password_enc)
+
+    @property
+    def mail_connected(self) -> bool:
+        """Готова ли почта к чтению: для Microsoft нужен токен, для IMAP — пароль и хост."""
+        if self.mail_kind == "graph":
+            return bool(self.mail_refresh_token_enc)
+        if self.mail_kind == "imap":
+            return bool(self.mail_password_enc and self.mail_imap_host)
+        return False
 
 
 class Video(Base):

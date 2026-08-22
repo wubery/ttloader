@@ -21,6 +21,7 @@ def get_settings(db: Session = Depends(get_db)):
         tg_bot_configured=bool(row.tg_bot_token),
         tg_chat_id=row.tg_chat_id,
         tg_login_enabled=row.tg_login_enabled,
+        ms_client_id=row.ms_client_id,
     )
 
 
@@ -35,6 +36,8 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
         row.tg_chat_id = ", ".join(ids) if ids else None
     if payload.tg_login_enabled is not None:
         row.tg_login_enabled = payload.tg_login_enabled
+    if payload.ms_client_id is not None:
+        row.ms_client_id = payload.ms_client_id.strip() or None
     if payload.new_password:
         row.admin_pass_hash = hash_password(payload.new_password)
     db.commit()
@@ -45,4 +48,5 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
         tg_bot_configured=bool(row.tg_bot_token),
         tg_chat_id=row.tg_chat_id,
         tg_login_enabled=row.tg_login_enabled,
+        ms_client_id=row.ms_client_id,
     )

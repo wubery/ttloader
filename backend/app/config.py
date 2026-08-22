@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Период автопроверки прокси аккаунтов (минуты). 0 — выключить.
     proxy_check_minutes: int = 30
 
+    # Период проверки живости кук и автоперелогина (часы). 0 — выключить.
+    # Часы, а не минуты: каждый вход — запуск браузера и лишний повод для подозрений.
+    session_check_hours: int = 6
+
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir, self.cookies_dir):
             Path(d).mkdir(parents=True, exist_ok=True)

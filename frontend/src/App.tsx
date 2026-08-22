@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, useCallback, createContext, useContext, useMemo } from "react";
-import { api, Account, Banner, Job, LoginStage, Platform, SettingsData, SystemVersion, Video } from "./api";
+import {
+  api, Account, AutoLoginState, Banner, Job, LoginStage, MailConnect, MailConnectState,
+  MailMessage, Platform, SettingsData, SystemVersion, Video,
+} from "./api";
 import { BannerEditor } from "./BannerEditor";
 
 /* ================================================================
@@ -369,7 +372,14 @@ function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () =>
   const [name, setName] = useState("");
   const [platform, setPlatform] = useState<Platform>("tiktok");
   const [proxy, setProxy] = useState("");
+  const [ttLogin, setTtLogin] = useState("");
+  const [ttPass, setTtPass] = useState("");
+  const [mailAddr, setMailAddr] = useState("");
+  const [mailPass, setMailPass] = useState("");
+  const [startLogin, setStartLogin] = useState(true);
   const [login, setLogin] = useState<{ id: number; name: string } | null>(null);
+  const [mailFor, setMailFor] = useState<Account | null>(null);
+  const [connectFor, setConnectFor] = useState<Account | null>(null);
   const [showCount, setShowCount] = useState(20);
   const toast = useToast();
   const { confirm } = useConfirm();
@@ -384,8 +394,26 @@ function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () =>
 
   async function create() {
     try {
-      await api.createAccount({ name, platform, proxy_url: proxy || null });
-      setName(""); setProxy(""); onChange(); toast.add("success", "Аккаунт создан");
+      const acc = await api.createAccount({
+        name, platform, proxy_url: proxy || null,
+        tt_login: ttLogin || null, tt_password: ttPass || null,
+        mail_address: mailAddr || null, mail_password: mailPass || null,
+        start_login: startLogin,
+      });
+      setName(""); setProxy(""); setTtLogin(""); setTtPass(""); setMailAddr(""); setMailPass("");
+      onChange();
+      if (startLogin && acc.has_tt_credentials) {
+        setLogin({ id: acc.id, name: acc.name });   // сразу показываем ход входа
+        toast.add("success", "Аккаунт создан — вхожу в него");
+      } else {
+        toast.add("success", "Аккаунт создан");
+      }
+    } catch (e: any) { toast.add("error", e.message); }
+  }
+  async function relogin(a: Account) {
+    try {
+      await api.loginAuto(a.id);
+      setLogin({ id: a.id, name: a.name });
     } catch (e: any) { toast.add("error", e.message); }
   }
   async function onCookies(id: number, f: File | null) {
@@ -419,7 +447,37 @@ function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () =>
             <button className="btn btn-vp w-100" onClick={create} disabled={!name}>Создать</button>
           </div>
         </div>
-        <p className="fs-sm text-muted mt-2 mb-0">Каждый аккаунт — свой прокси. Куки (storage_state) — авторизация без пароля.</p>
+
+        {/* Данные для автоматического входа: панель сама залогинится и достанет код из письма */}
+        <div className="row g-2 align-items-end mt-1">
+          <div className="col-md-3">
+            <label className="form-label vp">Логин {platform === "tiktok" ? "TikTok" : "аккаунта"}</label>
+            <input className="form-control vp" placeholder="почта или username" value={ttLogin} onChange={(e) => setTtLogin(e.target.value)} />
+          </div>
+          <div className="col-md-2">
+            <label className="form-label vp">Пароль</label>
+            <input className="form-control vp" type="password" value={ttPass} onChange={(e) => setTtPass(e.target.value)} />
+          </div>
+          <div className="col-md-3">
+            <label className="form-label vp">Почта аккаунта</label>
+            <input className="form-control vp" placeholder="name@outlook.com" value={mailAddr} onChange={(e) => setMailAddr(e.target.value)} />
+          </div>
+          <div className="col-md-2">
+            <label className="form-label vp">Пароль почты</label>
+            <input className="form-control vp" type="password" value={mailPass} onChange={(e) => setMailPass(e.target.value)} />
+          </div>
+          <div className="col-md-2">
+            <label className="d-flex align-items-center gap-1 fs-sm text-muted mb-2" style={{ cursor: "pointer" }}>
+              <input type="checkbox" className="form-check-input" checked={startLogin} onChange={(e) => setStartLogin(e.target.checked)} />
+              войти сразу
+            </label>
+          </div>
+        </div>
+        <p className="fs-sm text-muted mt-2 mb-0">
+          Каждый аккаунт — свой прокси. С логином и паролем панель входит сама; код из письма
+          она достанет тоже сама, если подключить почту (кнопка у профиля). Пароли хранятся
+          зашифрованными и наружу не отдаются.
+        </p>
       </div>
 
       <div className="d-flex flex-column gap-2">
@@ -434,15 +492,35 @@ function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () =>
                 {a.proxy_url ? <span className="badge-vp badge-vp-muted"><i className="bi bi-shield" /> прокси</span> : <span className="badge-vp badge-vp-danger">без прокси</span>}
                 {a.proxy_url && a.proxy_ok === true && <span className="badge-vp badge-vp-success">IP {a.proxy_ip}</span>}
                 {a.proxy_url && a.proxy_ok === false && <span className="badge-vp badge-vp-danger"><i className="bi bi-x-circle" /> прокси down</span>}
+                {a.has_tt_credentials && <span className="badge-vp badge-vp-muted"><i className="bi bi-key" /> автовход</span>}
+                {a.mail_address && (a.mail_connected
+                  ? <span className="badge-vp badge-vp-success"><i className="bi bi-envelope-check" /> почта</span>
+                  : <span className="badge-vp badge-vp-warning"><i className="bi bi-envelope-exclamation" /> почта не подключена</span>)}
               </div>
               <button className="btn btn-vp-danger btn-sm" onClick={async () => { if (await confirm("Удалить аккаунт?", `Вы уверены что хотите удалить «${a.name}»?`)) { api.deleteAccount(a.id).then(() => { onChange(); toast.add("info", "Аккаунт удалён"); }); } }}>
                 <i className="bi bi-trash" />
               </button>
             </div>
+            {a.login_error && <div className="fs-sm text-danger mt-1"><i className="bi bi-exclamation-triangle me-1" />{a.login_error}</div>}
             <div className="d-flex align-items-center gap-2 mt-2 flex-wrap">
-              <button className="btn btn-vp btn-sm" onClick={() => setLogin({ id: a.id, name: a.name })}>
-                <i className="bi bi-box-arrow-in-right me-1" />Войти
-              </button>
+              {a.has_tt_credentials ? (
+                <button className="btn btn-vp btn-sm" onClick={() => relogin(a)}>
+                  <i className="bi bi-box-arrow-in-right me-1" />Войти заново
+                </button>
+              ) : (
+                <button className="btn btn-vp btn-sm" onClick={() => setLogin({ id: a.id, name: a.name })}>
+                  <i className="bi bi-box-arrow-in-right me-1" />Войти
+                </button>
+              )}
+              {a.mail_address && (a.mail_connected ? (
+                <button className="btn btn-vp-outline btn-sm" onClick={() => setMailFor(a)}>
+                  <i className="bi bi-envelope me-1" />Почта
+                </button>
+              ) : (
+                <button className="btn btn-vp-outline btn-sm" onClick={() => setConnectFor(a)}>
+                  <i className="bi bi-envelope-plus me-1" />Подключить почту
+                </button>
+              ))}
               <label className="btn btn-vp-outline btn-sm mb-0">
                 <i className="bi bi-upload me-1" />Куки (JSON)
                 <input type="file" accept="application/json,.json" hidden onChange={(e) => onCookies(a.id, e.target.files?.[0] ?? null)} />
@@ -464,7 +542,242 @@ function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () =>
         {filtered.length === 0 && query && <div className="vp-card text-center text-muted py-4">Ничего не найдено по запросу «{query}»</div>}
       </div>
 
-      {login && <LoginModal login={login} onDone={() => { setLogin(null); onChange(); toast.add("success", "Вход выполнен"); }} onClose={() => setLogin(null)} />}
+      {login && (() => {
+        const acc = accounts.find((x) => x.id === login.id);
+        return acc?.has_tt_credentials
+          ? <AutoLoginModal account={login} onDone={() => { setLogin(null); onChange(); toast.add("success", "Вход выполнен"); }} onClose={() => { setLogin(null); onChange(); }} />
+          : <LoginModal login={login} onDone={() => { setLogin(null); onChange(); toast.add("success", "Вход выполнен"); }} onClose={() => setLogin(null)} />;
+      })()}
+      {mailFor && <MailModal account={mailFor} onClose={() => setMailFor(null)} />}
+      {connectFor && <MailConnectModal account={connectFor} onClose={() => { setConnectFor(null); onChange(); }} />}
+    </div>
+  );
+}
+
+/* ================================================================
+   Автоматический вход: панель сама вводит логин, пароль и код из письма.
+   Человек нужен только при капче или если письмо не пришло.
+   ================================================================ */
+const AUTO_STAGES: Record<string, { label: string; icon: string }> = {
+  idle: { label: "Ожидание", icon: "bi-hourglass" },
+  starting: { label: "Готовлю браузер", icon: "bi-hourglass-split" },
+  filling: { label: "Ввожу логин и пароль", icon: "bi-keyboard" },
+  waiting_code: { label: "Жду письмо с кодом", icon: "bi-envelope" },
+  submitting_code: { label: "Ввожу код", icon: "bi-123" },
+  done: { label: "Готово", icon: "bi-check-circle" },
+  captcha: { label: "Капча", icon: "bi-shield-exclamation" },
+  error: { label: "Ошибка", icon: "bi-x-circle" },
+};
+
+function AutoLoginModal({ account, onDone, onClose }: { account: { id: number; name: string }; onDone: () => void; onClose: () => void }) {
+  const [state, setState] = useState<AutoLoginState | null>(null);
+  const [code, setCode] = useState("");
+  const [manual, setManual] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    const load = () =>
+      api.loginState(account.id).then((s) => {
+        setState(s);
+        if (s.stage === "done" && !doneRef.current) { doneRef.current = true; onDone(); }
+      }).catch(() => {});
+    load();
+    const t = setInterval(load, 2000);
+    return () => clearInterval(t);
+  }, [account.id]);
+
+  async function sendCode() {
+    setBusy(true);
+    try { await api.loginCode(account.id, code); setCode(""); toast.add("info", "Код передан"); }
+    catch (e: any) { toast.add("error", e.message); }
+    finally { setBusy(false); }
+  }
+  async function pullCode() {
+    setBusy(true);
+    try {
+      const r = await api.mailCode(account.id);
+      if (r.code) { setCode(r.code); toast.add("success", `Код из письма: ${r.code}`); }
+      else toast.add("warning", r.message || "Код не найден");
+    } catch (e: any) { toast.add("error", e.message); }
+    finally { setBusy(false); }
+  }
+
+  const stage = state?.stage ?? "idle";
+  const info = AUTO_STAGES[stage] ?? AUTO_STAGES.idle;
+  const running = ["starting", "filling", "waiting_code", "submitting_code"].includes(stage);
+
+  return (
+    <div className="modal d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.6)" }}>
+      <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 520 }}>
+        <div className="modal-content vp">
+          <div className="modal-header vp">
+            <h6 className="modal-title"><i className="bi bi-magic me-2" />Вход: {account.name}</h6>
+            <button className="btn-close btn-close-white" onClick={onClose} />
+          </div>
+          <div className="modal-body vp">
+            <div className="d-flex align-items-center gap-2 mb-2">
+              {running ? <span className="spinner-border spinner-border-sm" /> : <i className={`bi ${info.icon} fs-5`} />}
+              <b>{info.label}</b>
+            </div>
+            {state?.message && <p className="fs-sm text-muted">{state.message}</p>}
+
+            {stage === "captcha" && state?.screenshot && (
+              <img className="img-fluid rounded" src={state.screenshot} alt="captcha"
+                   style={{ border: "1px solid var(--vp-border)" }} />
+            )}
+
+            {(stage === "waiting_code" || manual) && (
+              <div className="mt-3">
+                <label className="form-label vp">Код из письма</label>
+                <div className="d-flex gap-2">
+                  <input className="form-control vp" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
+                  <button className="btn btn-vp-outline btn-sm" onClick={pullCode} disabled={busy} title="Взять код из почты">
+                    <i className="bi bi-envelope-arrow-down" />
+                  </button>
+                  <button className="btn btn-vp btn-sm" onClick={sendCode} disabled={busy || !code}>ОК</button>
+                </div>
+                <div className="form-text fs-sm">Панель ищет код сама; вводите вручную, только если письмо не подхватилось.</div>
+              </div>
+            )}
+
+            {!manual && stage !== "waiting_code" && running && (
+              <button className="btn btn-link btn-sm p-0 fs-sm" onClick={() => setManual(true)}>ввести код вручную</button>
+            )}
+
+            {stage === "error" && (
+              <button className="btn btn-vp btn-sm mt-2" onClick={() => api.loginAuto(account.id).catch((e) => toast.add("error", e.message))}>
+                <i className="bi bi-arrow-clockwise me-1" />Попробовать снова
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   Почта аккаунта: список писем и подключение ящика Microsoft.
+   ================================================================ */
+function MailModal({ account, onClose }: { account: Account; onClose: () => void }) {
+  const [items, setItems] = useState<MailMessage[] | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+
+  const load = useCallback(() => {
+    setBusy(true);
+    api.mailList(account.id).then(setItems)
+      .catch((e) => toast.add("error", e.message))
+      .finally(() => setBusy(false));
+  }, [account.id]);
+  useEffect(load, [load]);
+
+  async function show(id: string) {
+    if (open === id) { setOpen(null); return; }
+    setOpen(id); setBody("загружаю…");
+    try { setBody((await api.mailBody(account.id, id)).body || "(пусто)"); }
+    catch (e: any) { setBody(`Ошибка: ${e.message}`); }
+  }
+
+  return (
+    <div className="modal d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.6)" }}>
+      <div className="modal-dialog modal-dialog-centered modal-lg">
+        <div className="modal-content vp">
+          <div className="modal-header vp">
+            <h6 className="modal-title"><i className="bi bi-envelope me-2" />{account.mail_address}</h6>
+            <button className="btn-close btn-close-white" onClick={onClose} />
+          </div>
+          <div className="modal-body vp" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+            <div className="d-flex gap-2 mb-2">
+              <button className="btn btn-vp-outline btn-sm" onClick={load} disabled={busy}>
+                {busy ? <span className="spinner-border spinner-border-sm me-1" /> : <i className="bi bi-arrow-clockwise me-1" />}Обновить
+              </button>
+              <button className="btn btn-vp btn-sm" onClick={async () => {
+                try {
+                  const r = await api.mailCode(account.id);
+                  toast.add(r.code ? "success" : "warning", r.code ? `Код: ${r.code}` : (r.message || "Код не найден"));
+                } catch (e: any) { toast.add("error", e.message); }
+              }}>
+                <i className="bi bi-123 me-1" />Взять код TikTok
+              </button>
+            </div>
+            {items === null && <div className="text-center py-4"><span className="spinner-border" /></div>}
+            {items?.length === 0 && <div className="text-center text-muted py-4">Писем нет</div>}
+            <div className="d-flex flex-column gap-1">
+              {items?.map((m) => (
+                <div key={m.id} className="vp-card mb-0" style={{ cursor: "pointer" }} onClick={() => show(m.id)}>
+                  <div className="d-flex justify-content-between gap-2">
+                    <b className="fs-sm">{m.subject}</b>
+                    <span className="fs-sm text-muted">{m.received_at ? new Date(m.received_at).toLocaleString() : ""}</span>
+                  </div>
+                  <div className="fs-sm text-muted">{m.sender}</div>
+                  {m.preview && open !== m.id && <div className="fs-sm text-muted mt-1">{m.preview}</div>}
+                  {open === m.id && <pre className="fs-sm mt-2 mb-0" style={{ whiteSpace: "pre-wrap" }}>{body}</pre>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MailConnectModal({ account, onClose }: { account: Account; onClose: () => void }) {
+  const [data, setData] = useState<MailConnect | null>(null);
+  const [state, setState] = useState<MailConnectState | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api.mailConnect(account.id).then(setData).catch((e) => setError(e.message));
+  }, [account.id]);
+
+  useEffect(() => {
+    if (!data) return;
+    const t = setInterval(() => {
+      api.mailConnectState(account.id).then((s) => {
+        setState(s);
+        if (s.state === "done") { clearInterval(t); }
+      }).catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
+  }, [data, account.id]);
+
+  return (
+    <div className="modal d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.6)" }}>
+      <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 460 }}>
+        <div className="modal-content vp">
+          <div className="modal-header vp">
+            <h6 className="modal-title"><i className="bi bi-envelope-plus me-2" />Подключение почты</h6>
+            <button className="btn-close btn-close-white" onClick={onClose} />
+          </div>
+          <div className="modal-body vp">
+            {error && <div className="alert alert-danger py-2 fs-sm">{error}</div>}
+            {!data && !error && <div className="text-center py-3"><span className="spinner-border" /></div>}
+            {data && (
+              <>
+                <p className="fs-sm text-muted mb-2">
+                  Откройте страницу Microsoft и введите код — это нужно один раз на ящик.
+                  Пароль вводится на сайте Microsoft, а не в панели.
+                </p>
+                <div className="text-center my-3">
+                  <div style={{ fontSize: 30, letterSpacing: 3, fontWeight: 700 }}>{data.user_code}</div>
+                  <a className="btn btn-vp btn-sm mt-2" href={data.verification_uri} target="_blank" rel="noreferrer">
+                    <i className="bi bi-box-arrow-up-right me-1" />Открыть страницу входа
+                  </a>
+                </div>
+                {state?.state === "pending" && <div className="fs-sm text-muted text-center"><span className="spinner-border spinner-border-sm me-2" />Жду подтверждения…</div>}
+                {state?.state === "done" && <div className="alert alert-success py-2 fs-sm mb-0">Почта подключена — можно закрывать.</div>}
+                {state?.state === "error" && <div className="alert alert-danger py-2 fs-sm mb-0">{state.message}</div>}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1288,13 +1601,14 @@ function Settings() {
   const [chatId, setChatId] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [newPass, setNewPass] = useState("");
+  const [msClientId, setMsClientId] = useState("");
   const [ver, setVer] = useState<SystemVersion | null>(null);
   const [gitToken, setGitToken] = useState("");
   const [gitOpen, setGitOpen] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
-    api.getSettings().then((d) => { setS(d); setChatId(d.tg_chat_id ?? ""); setEnabled(d.tg_login_enabled); }).catch((e) => toast.add("error", e.message));
+    api.getSettings().then((d) => { setS(d); setChatId(d.tg_chat_id ?? ""); setEnabled(d.tg_login_enabled); setMsClientId(d.ms_client_id ?? ""); }).catch((e) => toast.add("error", e.message));
     const load = () => api.systemVersion().then(setVer).catch(() => {});
     load();
     const t = setInterval(load, 5000);
@@ -1320,7 +1634,7 @@ function Settings() {
 
   async function save() {
     try {
-      const body: any = { tg_chat_id: chatId, tg_login_enabled: enabled };
+      const body: any = { tg_chat_id: chatId, tg_login_enabled: enabled, ms_client_id: msClientId };
       if (token) body.tg_bot_token = token;
       if (newPass) body.new_password = newPass;
       const d = await api.updateSettings(body);
@@ -1352,6 +1666,23 @@ function Settings() {
             <label className="form-check-label fs-sm" htmlFor="tgLoginEnabled">Разрешить вход в панель через Telegram (2FA)</label>
           </div>
           <p className="fs-sm text-muted mb-0">Уведомления о постинге и упавших прокси приходят во все указанные чаты. Бот: /queue, /accounts, /stats; присланное видео добавляется в библиотеку.</p>
+        </div>
+      </div>
+
+      {/* Почта аккаунтов */}
+      <div className="vp-card">
+        <div className="vp-card-header">
+          <h3><i className="bi bi-envelope-at me-2 text-accent" />Почта аккаунтов</h3>
+        </div>
+        <div>
+          <label className="form-label vp">Client ID приложения Microsoft</label>
+          <input className="form-control vp" placeholder="00000000-0000-0000-0000-000000000000"
+                 value={msClientId} onChange={(e) => setMsClientId(e.target.value)} />
+          <div className="form-text fs-sm">
+            Нужен, чтобы панель читала письма outlook/hotmail: Microsoft больше не пускает
+            к почте по обычному паролю. Регистрация приложения — разовая и бесплатная,
+            пошагово описана в INSTALL.md. Дальше у каждого профиля жмите «Подключить почту».
+          </div>
         </div>
       </div>
 

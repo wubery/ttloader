@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 
 from ..config import settings
@@ -14,11 +15,51 @@ from ..db import SessionLocal
 from ..models import Banner, BannerType, Job, JobStatus
 from . import media
 from .uploaders import get_uploader, parse_proxy
+from .uploaders.base import UploadError
 
 
 def _append_log(job: Job, msg: str) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
     job.log = (job.log or "") + f"[{stamp}] {msg}\n"
+
+
+def _ensure_session(account, db, log) -> bool:
+    """Проверяет куки и при необходимости выполняет автоматический вход.
+
+    True — можно постить (сессия жива или её восстановили), False — нет.
+    """
+    from .auto_login import get_state, is_running, start
+    from .uploaders.base import cookies_alive
+
+    try:
+        if cookies_alive(account.platform.value, account.cookies_path, account.proxy_url):
+            return True
+    except Exception as e:  # noqa: BLE001 — сеть мигнула: пробуем постить как есть
+        log(f"Не удалось проверить сессию ({e}) — продолжаю с текущими куками.")
+        return True
+
+    if not account.has_tt_credentials or not account.auto_login:
+        log("Куки аккаунта недействительны, а данных для входа нет.")
+        return False
+
+    log("Куки протухли — вхожу в аккаунт заново…")
+    if not is_running(account.id):
+        start(account.id)
+
+    waited = 0
+    while waited < 420:      # вход с ожиданием письма занимает минуты
+        time.sleep(5)
+        waited += 5
+        state = get_state(account.id)
+        if state.get("stage") == "done":
+            db.refresh(account)
+            log("Вход выполнен, продолжаю публикацию.")
+            return True
+        if state.get("stage") in ("error", "captcha"):
+            log(f"Войти не удалось: {state.get('message')}")
+            return False
+    log("Вход не завершился за 7 минут.")
+    return False
 
 
 def _parse_overlays(job: Job, db) -> list[dict]:
@@ -176,6 +217,14 @@ def run_job(job_id: int) -> None:
                 db.commit()
             except Exception:  # noqa: BLE001 — лог не должен ронять постинг
                 db.rollback()
+
+        # Протухшие куки — самая частая причина провала постинга. Если у аккаунта есть
+        # логин с паролем, перелогиниваемся сами и продолжаем, а не роняем задачу.
+        if not _ensure_session(account, db, _live_log):
+            raise UploadError(
+                "Сессия аккаунта недействительна, а войти заново не удалось — "
+                "проверьте логин/пароль и почту в профиле."
+            )
 
         result = uploader(
             video_path=source_path,

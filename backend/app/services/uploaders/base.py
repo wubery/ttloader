@@ -204,6 +204,46 @@ def require_cookies(cookies_path: str | None) -> str:
     return cookies_path
 
 
+# Страницы, которые честно редиректят на вход, если сессия умерла
+_ALIVE_CHECK_URLS = {
+    "tiktok": "https://www.tiktok.com/tiktokstudio/upload?from=upload",
+    "youtube": "https://studio.youtube.com",
+}
+
+
+def cookies_alive(platform: str, cookies_path: str | None, proxy_url: str | None) -> bool:
+    """Живы ли куки аккаунта: открываем страницу и смотрим, не выкинуло ли на вход.
+
+    Нужна и планировщику (автоперелогин), и постингу — раньше протухшие куки
+    обнаруживались только по невнятному «не найдено поле загрузки».
+    """
+    from playwright.sync_api import sync_playwright
+
+    if not cookies_path or not os.path.exists(cookies_path):
+        return False
+    url = _ALIVE_CHECK_URLS.get(platform)
+    if not url:
+        return True   # платформу проверять не умеем — не мешаем работать
+
+    proxy = parse_proxy(proxy_url) if proxy_url else None
+    with sync_playwright() as p:
+        browser = p.chromium.launch(**stealth_launch_kwargs(proxy, headless=True))
+        try:
+            ctx = browser.new_context(
+                storage_state=load_storage_state(cookies_path), **stealth_context_kwargs()
+            )
+            ctx.add_init_script(STEALTH_INIT_JS)
+            page = ctx.new_page()
+            page.goto(url, wait_until="load", timeout=60_000)
+            cur = (page.url or "").lower()
+            return "/login" not in cur and "/signup" not in cur and "accounts.google.com" not in cur
+        finally:
+            try:
+                browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 async def proxy_egress_ip(proxy_url: str, timeout_ms: int = 20000) -> str:
     """Возвращает внешний IP, с которого виден трафик через данный прокси.
 

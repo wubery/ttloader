@@ -177,6 +177,11 @@ while true; do
         case "$pull_out" in
           *"local changes"*|*"локальные изменения"*)
             reason="$reason (в каталоге проекта есть правки руками — отмените их: git checkout -- .)" ;;
+          *"fast-forward"*|*"diverged"*|*"unrelated histories"*)
+            # История репозитория переписана (или на сервере есть свои коммиты) —
+            # обычный pull так не догонит, нужен явный сброс на удалённую ветку.
+            ahead="$(git rev-list --count '@{u}'..HEAD 2>/dev/null || echo '?')"
+            reason="История разошлась с GitHub (своих коммитов на сервере: $ahead). Обновить принудительно: git fetch origin && git reset --hard origin/main, затем нажать «Обновить» ещё раз" ;;
         esac
         set_status "Ошибка git pull: $(printf '%s' "${reason:-см. update/updater.log}" | cut -c1-220)"
       fi

@@ -35,6 +35,21 @@ POST_BUTTON = 'button[data-e2e="post_video_button"], button:has-text("Post")'
 # считаем задачу успешной: клик по кнопке сам по себе ничего не доказывает.
 PUBLISH_API_HINTS = ("/aweme/v1/web/aweme/post", "/project/post", "/web/project/publish", "/upload/publish")
 
+# После клика по «Опубликовать» TikTok может переспросить: «Продолжить публикацию?
+# Ваше видео ещё проверяется…». Если этот диалог не подтвердить, видео НЕ уходит.
+PUBLISH_CONFIRM_HINTS = (
+    "продолжить публикацию", "ваше видео еще проверяется", "ваше видео ещё проверяется",
+    "continue posting", "continue to post", "still being checked", "still checking",
+)
+PUBLISH_CONFIRM_BUTTONS = ("Опубликовать", "Post", "Continue", "Продолжить")
+
+# Признаки РЕАЛЬНОГО успеха. Осторожно с формулировками: фраза «ваше видео»
+# встречается и в диалоге «Ваше видео ещё проверяется», который успехом не является.
+SUCCESS_TEXT_RE = (
+    r"видео опубликовано|видео размещено|успешно опубликован|"
+    r"has been posted|was posted|posted successfully|video is now live"
+)
+
 MAX_UPLOAD_WAIT_MS = 10 * 60_000   # заливка большого видео через прокси идёт минутами
 MAX_PUBLISH_WAIT_MS = 90_000       # ожидание подтверждения после клика «Опубликовать»
 
@@ -73,6 +88,10 @@ def upload_tiktok(
             # Ответы API публикации — единственное надёжное доказательство, что пост ушёл.
             publish_responses: list[tuple[int, str, str]] = []
             page.on("response", lambda r: _remember_publish(r, publish_responses))
+            # Отдельно копим все POST-запросы, похожие на публикацию: если подтвердить
+            # пост не удалось, по этому списку видно, куда TikTok на самом деле стучится.
+            api_calls: list[str] = []
+            page.on("response", lambda r: _remember_api_call(r, api_calls))
 
             _log("Открываю страницу загрузки TikTok…")
             page.goto(UPLOAD_URL, wait_until="load", timeout=60_000)
@@ -128,11 +147,18 @@ def upload_tiktok(
             _kill_overlays(page, log=_log)
             _click_post(page, log=_log)
 
+            # TikTok часто переспрашивает «Продолжить публикацию?», пока идёт
+            # «быстрая проверка контента». Без ответа на этот диалог видео не уходит.
+            page.wait_for_timeout(2_000)
+            _confirm_publish_modal(page, log=_log)
+
             # Клик ничего не доказывает — ждём подтверждения от самого TikTok.
             ok, detail = _wait_publish_confirmed(
                 page, publish_responses, log=_log, timeout_ms=MAX_PUBLISH_WAIT_MS
             )
             if not ok:
+                if api_calls:
+                    _log("POST-запросы TikTok за время публикации: " + "; ".join(api_calls))
                 shot = _screenshot(page, "publish_unconfirmed", log=_log)
                 raise UploadError(
                     f"TikTok не подтвердил публикацию: {detail}. Видео могло не уйти — "
@@ -140,7 +166,14 @@ def upload_tiktok(
                     + (f" Скриншот: {shot}" if shot else "")
                 )
 
-            _log(f"Публикация подтверждена TikTok ({detail}).")
+            _log(f"Публикация подтверждена TikTok ({detail}). Страница: {page.url}")
+            # Не закрываем браузер мгновенно: запрос публикации может быть ещё в полёте,
+            # а закрытие контекста его оборвёт.
+            try:
+                page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:  # noqa: BLE001
+                page.wait_for_timeout(5_000)
+            _screenshot(page, "publish_ok", log=_log)
             return UploadResult(ok=True, url=_find_posted_url(publish_responses), log="\n".join(lines))
         except UploadError:
             raise
@@ -173,6 +206,20 @@ def _remember_publish(response, sink: list) -> None:
         except Exception:  # noqa: BLE001 — тело может быть недоступно
             pass
         sink.append((response.status, url, body))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _remember_api_call(response, sink: list) -> None:
+    """Пишет POST-запросы, похожие на публикацию — для разбора неудач."""
+    try:
+        if response.request.method != "POST":
+            return
+        url = response.url
+        if not any(k in url for k in ("/post", "publish", "/project", "/aweme")):
+            return
+        if len(sink) < 25:
+            sink.append(f"[{response.status}] {url.split('?')[0]}")
     except Exception:  # noqa: BLE001
         pass
 
@@ -217,9 +264,9 @@ def _wait_upload_complete(page, log=lambda m: None, timeout_ms: int = MAX_UPLOAD
         if st.get("postEnabled"):
             log(f"Заливка завершена за {waited // 1000}с — кнопка публикации активна.")
             return
-        note = f"{st.get('percent')}%" if st.get("percent") is not None else (
-            "идёт заливка" if st.get("uploading") else "жду готовности"
-        )
+        # Проценты со страницы не показываем: на странице Studio их несколько
+        # (качество, проверки), и в лог попадали случайные числа вроде «49% → 4% → 1%».
+        note = "идёт заливка" if st.get("uploading") else "жду готовности"
         if note != last_note:
             log(f"…{note} ({waited // 1000}с)")
             last_note = note
@@ -261,21 +308,34 @@ def _click_post(page, log=lambda m: None) -> None:
 
 
 def _wait_publish_confirmed(page, responses: list, log=lambda m: None, timeout_ms: int = MAX_PUBLISH_WAIT_MS):
-    """Ждёт доказательства публикации: ответ API, уход со страницы загрузки или тост."""
+    """Ждёт доказательства публикации: ответ API, уход со страницы загрузки или тост.
+
+    Каждый ответ публикации логируем: без этого невозможно разобрать случаи
+    «задача успешна, а видео в TikTok нет» — не видно, чем именно подтвердилось.
+    """
     waited = 0
     step = 2_000
+    seen: set[int] = set()
     while waited < timeout_ms:
-        for status, url, body in list(responses):
+        for i, (status, url, body) in enumerate(list(responses)):
+            if i not in seen:
+                seen.add(i)
+                log(f"Ответ TikTok [{status}] {url.split('?')[0]} :: {(body or '(пустое тело)')[:180]}")
             if status == 200 and ('"status_code":0' in body or '"status_code": 0' in body or not body):
                 return True, f"ответ {url.split('?')[0]}"
             if status == 200 and '"status_code"' in body:
                 return False, f"TikTok вернул ошибку в ответе: {body[:200]}"
+        # Диалог «Продолжить публикацию?» — не успех, а вопрос: подтверждаем и ждём дальше.
+        if _confirm_publish_modal(page, log=log):
+            page.wait_for_timeout(step)
+            waited += step
+            continue
         try:
             cur = (page.url or "").lower()
             if "/upload" not in cur and ("/content" in cur or "/tiktokstudio" in cur):
                 return True, f"страница сменилась на {cur}"
             done = page.evaluate(
-                """() => /видео опубликовано|ваше видео|posted|published|успешно/i
+                f"""() => new RegExp({SUCCESS_TEXT_RE!r}, 'i')
                     .test(document.body ? document.body.innerText : '')"""
             )
             if done:
@@ -313,6 +373,39 @@ def _screenshot(page, tag: str, log=lambda m: None) -> str | None:
         return None
 
 
+def _publish_confirm_modal(page):
+    """Возвращает (локатор, текст) видимого диалога «Продолжить публикацию?» или (None, "")."""
+    try:
+        m = page.locator("div[data-floating-ui-portal]").last
+        if m.count() == 0 or not m.is_visible():
+            return None, ""
+        txt = " ".join((m.inner_text() or "").split()).lower()
+        if any(h in txt for h in PUBLISH_CONFIRM_HINTS):
+            return m, txt
+    except Exception:  # noqa: BLE001
+        pass
+    return None, ""
+
+
+def _confirm_publish_modal(page, log=lambda m: None) -> bool:
+    """Подтверждает диалог «Продолжить публикацию?» — без него видео не уходит."""
+    modal, txt = _publish_confirm_modal(page)
+    if modal is None:
+        return False
+    for label in PUBLISH_CONFIRM_BUTTONS:
+        try:
+            btn = modal.locator(f'button:has-text("{label}")').first
+            if btn.count() > 0 and btn.is_visible():
+                btn.click(timeout=5_000)
+                log(f"TikTok переспросил «Продолжить публикацию?» — подтвердил кнопкой «{label}».")
+                page.wait_for_timeout(1_500)
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    log(f"Виден диалог подтверждения публикации, но кнопка не нажалась: {txt[:140]}")
+    return False
+
+
 def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) -> bool:
     """Закрывает всплывающую модалку, перехватывающую клики.
 
@@ -328,6 +421,10 @@ def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) 
     labels = ["Отмена", "Cancel", "Не сейчас", "Not now", "OK", "Включить", "Enable"]
     waited = 0
     while waited < timeout_ms:
+        # Диалог «Продолжить публикацию?» трогать нельзя: «Отмена» здесь отменяет
+        # саму публикацию. Его подтверждает отдельная функция.
+        if _publish_confirm_modal(page)[0] is not None:
+            return False
         for label in labels:
             try:
                 btn = page.locator(

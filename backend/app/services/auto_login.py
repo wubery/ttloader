@@ -24,6 +24,7 @@ from .login_session import (
     CAPTCHA_SEL,
     CODE_INPUT_SEL,
     EMAIL_TAB_SEL,
+    ERROR_SEL,
     LOGIN_BTN_SEL,
     LOGIN_URLS,
     PASSWORD_SEL,
@@ -47,7 +48,11 @@ _state: dict[int, dict] = {}
 _state_lock = threading.Lock()
 _manual_codes: dict[int, str] = {}   # код, введённый руками, если из почты не пришёл
 
-CODE_WAIT_SECONDS = 150       # сколько ждём письмо с кодом
+# Ждём код долго: письмо может задержаться, а если почта не подключена — человеку
+# нужно время сходить за кодом. Раньше окно было 150с, и введённый вручную код
+# прилетал уже в закрытую сессию («активной сессии входа нет»).
+CODE_WAIT_SECONDS = 600
+MAIL_FAST_POLL_SECONDS = 180  # первые три минуты опрашиваем почту часто
 CAPTCHA_WAIT_SECONDS = 600    # сколько держим браузер, пока человек решает капчу
 
 
@@ -152,11 +157,16 @@ def _login_flow(acc: Account, db, login: str, password: str) -> None:
                 pass
 
             _set(acc.id, "filling", "Ввожу логин и пароль…")
-            page.fill(USERNAME_SEL, login, timeout=20_000)
-            page.fill(PASSWORD_SEL, password, timeout=20_000)
-            page.locator(LOGIN_BTN_SEL).first.click(timeout=15_000)
+            _type_into(page, USERNAME_SEL, login)
+            _type_into(page, PASSWORD_SEL, password)
+            _click_login(page)
 
             stage = _detect(page)
+            if stage == "unknown":
+                # TikTok мог показать «неверный пароль» / «аккаунт не найден» — покажем это
+                err = _form_error(page)
+                if err:
+                    raise UploadError(f"TikTok отклонил вход: {err}")
             if stage == "done":
                 _finish(acc, db, context)
                 return
@@ -173,7 +183,7 @@ def _login_flow(acc: Account, db, login: str, password: str) -> None:
                 )
 
             _set(acc.id, "submitting_code", "Ввожу код из письма…")
-            page.fill(CODE_INPUT_SEL, code, timeout=15_000)
+            _type_into(page, CODE_INPUT_SEL, code)
             try:
                 page.locator(VERIFY_BTN_SEL).first.click(timeout=8_000)
             except Exception:  # noqa: BLE001
@@ -191,6 +201,55 @@ def _login_flow(acc: Account, db, login: str, password: str) -> None:
                 browser.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _type_into(page, selector: str, text: str) -> None:
+    """Печатает текст по символам вместо fill().
+
+    fill() проставляет значение напрямую в DOM, а форма TikTok на React ждёт обычных
+    событий ввода: без них кнопка входа остаётся disabled и клик по ней падает
+    по таймауту (ровно это и происходило).
+    """
+    field = page.locator(selector).first
+    field.click(timeout=20_000)
+    # Чистим поле клавишами, а не fill(): проверено на живой форме — после fill()
+    # кнопка входа остаётся disabled, а после посимвольного набора становится активной.
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Delete")
+    page.keyboard.type(text, delay=45)
+    page.wait_for_timeout(300)
+
+
+def _click_login(page, wait_ms: int = 15_000) -> None:
+    """Ждёт, пока кнопка входа станет активной, и жмёт её."""
+    btn = page.locator(LOGIN_BTN_SEL).first
+    waited = 0
+    while waited < wait_ms:
+        try:
+            if btn.is_enabled():
+                btn.click(timeout=10_000)
+                return
+        except Exception:  # noqa: BLE001 — кнопка могла перерисоваться, пробуем ещё
+            pass
+        page.wait_for_timeout(500)
+        waited += 500
+    raise UploadError(
+        "Кнопка входа осталась неактивной — TikTok не принял введённые данные "
+        "(проверьте логин и пароль) или изменил форму входа."
+    )
+
+
+def _form_error(page) -> str | None:
+    """Текст ошибки формы («неверный пароль», «аккаунт не найден» и т.п.)."""
+    try:
+        texts = page.locator(ERROR_SEL).all_inner_texts()
+    except Exception:  # noqa: BLE001
+        return None
+    for t in texts:
+        t = (t or "").strip()
+        if 3 < len(t) < 200:
+            return t
+    return None
 
 
 def _detect(page, timeout_ms: int = 30_000) -> str:
@@ -224,25 +283,29 @@ def _detect(page, timeout_ms: int = 30_000) -> str:
 
 def _obtain_code(acc: Account, db, started: datetime) -> str | None:
     """Ждёт код: сначала из почты, параллельно принимая ручной ввод."""
+    minutes = CODE_WAIT_SECONDS // 60
     if not acc.mail_connected:
-        _set(acc.id, "waiting_code", "Почта не подключена — введите код из письма вручную.")
+        _set(acc.id, "waiting_code", f"Почта не подключена — введите код из письма вручную (жду {minutes} мин).")
     else:
-        _set(acc.id, "waiting_code", "Жду письмо с кодом…")
+        _set(acc.id, "waiting_code", f"Жду письмо с кодом (до {minutes} мин)…")
 
     waited = 0
+    next_mail_check = 0
     while waited < CODE_WAIT_SECONDS:
         manual = _manual_codes.pop(acc.id, None)
         if manual:
             return manual
-        if acc.mail_connected:
+        if acc.mail_connected and waited >= next_mail_check:
             try:
                 code = mail.find_login_code(acc, db, since=started)
                 if code:
                     return code
             except mail.MailError as e:
                 _set(acc.id, "waiting_code", f"Почта недоступна ({e}). Введите код вручную.")
-        _sleep(5)
-        waited += 5
+            # первые минуты проверяем часто, дальше реже — письмо обычно приходит сразу
+            next_mail_check = waited + (5 if waited < MAIL_FAST_POLL_SECONDS else 20)
+        _sleep(2)
+        waited += 2
     return _manual_codes.pop(acc.id, None)
 
 

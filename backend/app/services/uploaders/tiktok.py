@@ -437,37 +437,59 @@ def _screenshot(page, tag: str, log=lambda m: None) -> str | None:
         return None
 
 
+# Ищем диалог по тексту среди ВСЕХ плавающих контейнеров: на странице их несколько
+# (например, подсказка «Добавлены новые функции редактирования»), и брать последний
+# нельзя — именно из-за этого диалог оставался ненажатым.
+_FIND_CONFIRM_JS = """
+(hints) => {
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const okLabels = ['опубликовать', 'post', 'continue', 'продолжить'];
+  for (const el of document.querySelectorAll('div,section,article,[role="dialog"]')) {
+    const t = norm(el.innerText);
+    // длинный текст = это контейнер всей страницы, а не диалог
+    if (!t || t.length > 400) continue;
+    if (!hints.some(h => t.includes(h))) continue;
+    const btns = [...el.querySelectorAll('button')].filter(b => b.offsetParent !== null);
+    const ok = btns.find(b => okLabels.includes(norm(b.innerText)));
+    if (ok) return { text: t.slice(0, 200), label: norm(ok.innerText) };
+  }
+  return null;
+}
+"""
+
+_CLICK_CONFIRM_JS = _FIND_CONFIRM_JS.replace(
+    "if (ok) return { text: t.slice(0, 200), label: norm(ok.innerText) };",
+    "if (ok) { ok.click(); return { text: t.slice(0, 200), label: norm(ok.innerText) }; }",
+)
+
+
 def _publish_confirm_modal(page):
-    """Возвращает (локатор, текст) видимого диалога «Продолжить публикацию?» или (None, "")."""
+    """Возвращает (найден, текст) видимого диалога «Продолжить публикацию?»."""
     try:
-        m = page.locator("div[data-floating-ui-portal]").last
-        if m.count() == 0 or not m.is_visible():
-            return None, ""
-        txt = " ".join((m.inner_text() or "").split()).lower()
-        if any(h in txt for h in PUBLISH_CONFIRM_HINTS):
-            return m, txt
+        found = page.evaluate(_FIND_CONFIRM_JS, list(PUBLISH_CONFIRM_HINTS))
+        if found:
+            return True, found.get("text", "")
     except Exception:  # noqa: BLE001
         pass
-    return None, ""
+    return False, ""
 
 
 def _confirm_publish_modal(page, log=lambda m: None) -> bool:
-    """Подтверждает диалог «Продолжить публикацию?» — без него видео не уходит."""
-    modal, txt = _publish_confirm_modal(page)
-    if modal is None:
+    """Подтверждает диалог «Продолжить публикацию?» — без него видео не уходит.
+
+    Жмём через DOM: оверлей диалога перехватывает обычные клики Playwright
+    (повторный клик по форме падал по таймауту именно из-за него).
+    """
+    try:
+        res = page.evaluate(_CLICK_CONFIRM_JS, list(PUBLISH_CONFIRM_HINTS))
+    except Exception as e:  # noqa: BLE001
+        log(f"Не удалось проверить диалог подтверждения: {type(e).__name__}")
         return False
-    for label in PUBLISH_CONFIRM_BUTTONS:
-        try:
-            btn = modal.locator(f'button:has-text("{label}")').first
-            if btn.count() > 0 and btn.is_visible():
-                btn.click(timeout=5_000)
-                log(f"TikTok переспросил «Продолжить публикацию?» — подтвердил кнопкой «{label}».")
-                page.wait_for_timeout(1_500)
-                return True
-        except Exception:  # noqa: BLE001
-            continue
-    log(f"Виден диалог подтверждения публикации, но кнопка не нажалась: {txt[:140]}")
-    return False
+    if not res:
+        return False
+    log(f"TikTok переспросил «Продолжить публикацию?» — подтвердил кнопкой «{res.get('label')}».")
+    page.wait_for_timeout(1_500)
+    return True
 
 
 def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) -> bool:
@@ -482,12 +504,14 @@ def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) 
 
     # Порядок важен: сначала нейтральные ответы. «Включить» (Enable) — крайний
     # случай: он что-то включает в аккаунте, поэтому жмём его последним и с меткой в логе.
-    labels = ["Отмена", "Cancel", "Не сейчас", "Not now", "OK", "Включить", "Enable"]
+    # «Понятно»/«Got it» — информационные подсказки TikTok («Добавлены новые функции
+    # редактирования»); они висят поверх страницы и перехватывают клики.
+    labels = ["Понятно", "Got it", "Отмена", "Cancel", "Не сейчас", "Not now", "OK", "Включить", "Enable"]
     waited = 0
     while waited < timeout_ms:
         # Диалог «Продолжить публикацию?» трогать нельзя: «Отмена» здесь отменяет
         # саму публикацию. Его подтверждает отдельная функция.
-        if _publish_confirm_modal(page)[0] is not None:
+        if _publish_confirm_modal(page)[0]:
             return False
         for label in labels:
             try:

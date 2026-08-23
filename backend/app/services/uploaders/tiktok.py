@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import time as _time
 
 from .base import (
     STEALTH_INIT_JS,
@@ -92,6 +93,9 @@ def upload_tiktok(
             # пост не удалось, по этому списку видно, куда TikTok на самом деле стучится.
             api_calls: list[str] = []
             page.on("response", lambda r: _remember_api_call(r, api_calls))
+            # Трафик заливки в CDN — по нему понимаем, что файл реально ушёл.
+            watch = UploadWatch()
+            page.on("request", watch.on_request)
 
             _log("Открываю страницу загрузки TikTok…")
             page.goto(UPLOAD_URL, wait_until="load", timeout=60_000)
@@ -139,7 +143,7 @@ def upload_tiktok(
             # Ждём РЕАЛЬНОГО завершения заливки, а не фиксированные 10 секунд:
             # через прокси большое видео льётся минутами, и клик по неактивной
             # кнопке «Опубликовать» раньше молча ничего не делал.
-            _wait_upload_complete(page, log=_log, timeout_ms=MAX_UPLOAD_WAIT_MS)
+            _wait_upload_complete(page, log=_log, timeout_ms=MAX_UPLOAD_WAIT_MS, watch=watch)
 
             _log("Публикую…")
             # На случай, если диалог/обучающий оверлей появился/вернулся — убираем перед кликом.
@@ -249,11 +253,41 @@ def _upload_state(page) -> dict:
         return {}
 
 
-def _wait_upload_complete(page, log=lambda m: None, timeout_ms: int = MAX_UPLOAD_WAIT_MS) -> None:
-    """Ждёт, пока видео дольётся и кнопка публикации станет активной.
+class UploadWatch:
+    """Следит за трафиком заливки видео в CDN TikTok.
 
-    Раньше здесь стояли фиксированные 10 секунд: при заливке через прокси этого
-    почти всегда мало, кнопка оставалась неактивной, а клик по ней ничего не делал.
+    Состояние кнопки «Опубликовать» ненадёжно: TikTok иногда держит её активной,
+    пока файл ещё льётся, и тогда клик уходит в пустоту («Заливка завершена за 0с»).
+    Факт передачи данных виден по запросам к tiktokcdn — на них и ориентируемся.
+    """
+
+    QUIET_SECONDS = 6.0
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.last_at = 0.0
+
+    def on_request(self, request) -> None:
+        try:
+            url = request.url
+            if "tiktokcdn" in url or "/upload/" in url or "/video/upload" in url:
+                self.count += 1
+                self.last_at = _time.time()
+        except Exception:  # noqa: BLE001
+            pass
+
+    @property
+    def quiet_for(self) -> float:
+        return _time.time() - self.last_at if self.count else 0.0
+
+
+def _wait_upload_complete(page, log=lambda m: None, timeout_ms: int = MAX_UPLOAD_WAIT_MS,
+                          watch: "UploadWatch | None" = None) -> None:
+    """Ждёт РЕАЛЬНОГО конца заливки: тишины в CDN-трафике плюс активной кнопки.
+
+    Раньше здесь стояли фиксированные 10 секунд, потом — только состояние кнопки.
+    Оба признака врут: кнопка бывает активной с самого начала, и клик уходит
+    в пустоту, пока видео ещё заливается.
     """
     log("Жду завершения заливки видео на серверы TikTok…")
     waited = 0
@@ -262,8 +296,26 @@ def _wait_upload_complete(page, log=lambda m: None, timeout_ms: int = MAX_UPLOAD
     while waited < timeout_ms:
         st = _upload_state(page)
         if st.get("postEnabled"):
-            log(f"Заливка завершена за {waited // 1000}с — кнопка публикации активна.")
-            return
+            if watch is None or not watch.count:
+                # CDN-запросов не видно (могли не совпасть по адресу) — не ждём вечно,
+                # но и не жмём мгновенно: даём заливке минимум времени.
+                if waited >= 20_000:
+                    log(f"Заливка: запросов к CDN не видно, кнопка активна ({waited // 1000}с) — публикую.")
+                    return
+            elif watch.quiet_for >= watch.QUIET_SECONDS:
+                log(
+                    f"Заливка завершена за {waited // 1000}с "
+                    f"(запросов к CDN: {watch.count}, тишина {watch.quiet_for:.0f}с)."
+                )
+                return
+            else:
+                note = f"кнопка активна, но данные ещё идут в CDN ({watch.count} запросов)"
+                if note != last_note:
+                    log(f"…{note}")
+                    last_note = note
+                page.wait_for_timeout(step)
+                waited += step
+                continue
         # Проценты со страницы не показываем: на странице Studio их несколько
         # (качество, проверки), и в лог попадали случайные числа вроде «49% → 4% → 1%».
         note = "идёт заливка" if st.get("uploading") else "жду готовности"
@@ -316,7 +368,19 @@ def _wait_publish_confirmed(page, responses: list, log=lambda m: None, timeout_m
     waited = 0
     step = 2_000
     seen: set[int] = set()
+    reclicked = False
     while waited < timeout_ms:
+        # Клик мог не сработать (страница была занята) — тогда через треть окна
+        # ожидания форма всё ещё на месте с активной кнопкой. Жмём ещё раз.
+        if not reclicked and waited >= timeout_ms // 3:
+            reclicked = True
+            st = _upload_state(page)
+            if st.get("postEnabled") and "/upload" in (page.url or ""):
+                log("Ничего не произошло после клика, а форма и кнопка на месте — жму «Опубликовать» ещё раз.")
+                try:
+                    page.locator(POST_BUTTON).first.click(timeout=10_000)
+                except Exception as e:  # noqa: BLE001
+                    log(f"Повторный клик не прошёл: {type(e).__name__}")
         for i, (status, url, body) in enumerate(list(responses)):
             if i not in seen:
                 seen.add(i)

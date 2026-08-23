@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -89,6 +90,25 @@ def get_job_output(job_id: int, db: Session = Depends(get_db)):
     if not os.path.exists(path):
         raise HTTPException(404, "Файл не найден")
     return FileResponse(path)
+
+
+@router.get("/{job_id}/screenshot")
+def get_job_screenshot(job_id: int, db: Session = Depends(get_db)):
+    """Отдаёт скриншот страницы TikTok, сохранённый при разборе публикации.
+
+    Имя файла загрузчик пишет в лог задачи; без этого эндпоинта посмотреть его
+    можно было только по SSH, и разбирать неудачную публикацию было нечем.
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(404, "Задача не найдена")
+    names = re.findall(r"tiktok_[a-z_]+_\d+\.png", f"{job.log or ''}\n{job.error or ''}")
+    if not names:
+        raise HTTPException(404, "Для этой задачи скриншота нет")
+    path = os.path.join(settings.output_dir, names[-1])  # последний — самый показательный
+    if not os.path.exists(path):
+        raise HTTPException(404, "Файл скриншота не найден")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.delete("/{job_id}")

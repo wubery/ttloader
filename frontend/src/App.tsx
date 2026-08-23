@@ -1163,6 +1163,12 @@ function Jobs({ jobs, accounts, videos, onChange }: {
             </div>
             {jb.caption && <div className="vp-job-caption">{jb.caption}</div>}
             {jb.error && <div className="vp-job-error"><i className="bi bi-exclamation-triangle me-1" />{jb.error}</div>}
+            {/* Скриншот страницы TikTok в момент разбора — иначе неудачу не посмотреть */}
+            {/tiktok_[a-z_]+_\d+\.png/.test(`${jb.log ?? ""}${jb.error ?? ""}`) && (
+              <a className="btn btn-vp-outline btn-sm mt-2" href={`/api/jobs/${jb.id}/screenshot`} target="_blank" rel="noreferrer">
+                <i className="bi bi-image me-1" />Скриншот страницы TikTok
+              </a>
+            )}
             {jb.log && (
               <details className="vp-job-log">
                 <summary className="fs-sm text-muted" style={{ cursor: "pointer" }}>Показать лог</summary>

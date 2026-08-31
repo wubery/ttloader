@@ -164,6 +164,9 @@ class Job(Base):
     # Слои редактора (JSON-массив): несколько баннеров и текстов, вжигаются в видео.
     # Если задано — используется вместо одиночного banner_id. Формат см. media.render_with_overlays.
     overlays: Mapped[str | None] = mapped_column(Text, default=None)
+    # Общий идентификатор пачки: одно видео, разосланное на несколько аккаунтов.
+    # Нужен, чтобы показать группу в очереди и слать одно итоговое уведомление.
+    group_id: Mapped[str | None] = mapped_column(String(32), default=None)
 
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.pending)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)

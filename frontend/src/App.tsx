@@ -1037,22 +1037,40 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
 function PostForm({ accounts, videos, banners, onCreated }: {
   accounts: Account[]; videos: Video[]; banners: Banner[]; onCreated: () => void;
 }) {
-  const [accountId, setAccountId] = useState<number | null>(null);
+  const [picked, setPicked] = useState<number[]>([]);
   const [videoId, setVideoId] = useState<number | null>(null);
   const [bannerId, setBannerId] = useState<number | null>(null);
   const [caption, setCaption] = useState("");
   const [when, setWhen] = useState("");
+  const [spreadMin, setSpreadMin] = useState(5);
+  const [spreadMax, setSpreadMax] = useState(20);
+  const [varyCaption, setVaryCaption] = useState(true);
+  const [busy, setBusy] = useState(false);
   const toast = useToast();
 
+  const ready = accounts.filter((a) => a.has_cookies && a.active);
+  const toggle = (id: number) =>
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
   async function submit() {
-    if (!accountId || !videoId) { toast.add("warning", "Выберите аккаунт и видео"); return; }
+    if (picked.length === 0 || !videoId) { toast.add("warning", "Выберите аккаунты и видео"); return; }
+    setBusy(true);
     try {
-      await api.createJob({
-        account_id: accountId, video_id: videoId, banner_id: bannerId,
-        caption, scheduled_at: when ? new Date(when).toISOString() : null,
+      const r = await api.createJobsBulk({
+        account_ids: picked,
+        video_id: videoId,
+        banner_id: bannerId,
+        caption,
+        scheduled_at: when ? new Date(when).toISOString() : null,
+        spread_min_minutes: picked.length > 1 ? spreadMin : 0,
+        spread_max_minutes: picked.length > 1 ? spreadMax : 0,
+        vary_caption: picked.length > 1 && varyCaption,
       });
-      toast.add("success", "Задача создана"); onCreated();
+      toast.add("success", `Создано задач: ${r.jobs.length}`);
+      if (r.skipped.length) toast.add("warning", "Пропущены: " + r.skipped.join("; "));
+      onCreated();
     } catch (e: any) { toast.add("error", e.message); }
+    finally { setBusy(false); }
   }
 
   return (
@@ -1061,12 +1079,33 @@ function PostForm({ accounts, videos, banners, onCreated }: {
         <h3><i className="bi bi-plus-circle me-2 text-accent" />Новый пост</h3>
       </div>
       <div className="row g-3">
-        <div className="col-md-6">
-          <label className="form-label vp">Аккаунт</label>
-          <select className="form-select vp" value={accountId ?? ""} onChange={(e) => setAccountId(Number(e.target.value) || null)}>
-            <option value="">— выбрать —</option>
-            {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.platform}){a.has_cookies ? "" : " ⚠без кук"}</option>)}
-          </select>
+        <div className="col-12">
+          <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <label className="form-label vp mb-0">
+              Аккаунты{picked.length > 0 && <span className="badge-vp badge-vp-info ms-2">выбрано {picked.length}</span>}
+            </label>
+            <div className="d-flex gap-2">
+              <button className="btn btn-vp-outline btn-sm" onClick={() => setPicked(ready.map((a) => a.id))}>Выбрать все</button>
+              <button className="btn btn-vp-outline btn-sm" disabled={picked.length === 0} onClick={() => setPicked([])}>Снять</button>
+            </div>
+          </div>
+          <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid var(--vp-border)", borderRadius: 8, padding: 8 }}>
+            {accounts.length === 0 && <div className="fs-sm text-muted">Аккаунтов нет — добавьте их на вкладке «Аккаунты».</div>}
+            {accounts.map((a) => {
+              const usable = a.has_cookies && a.active;
+              return (
+                <label key={a.id} className="d-flex align-items-center gap-2 py-1" style={{ cursor: usable ? "pointer" : "not-allowed", opacity: usable ? 1 : 0.55 }}>
+                  <input type="checkbox" className="form-check-input mt-0" disabled={!usable}
+                         checked={picked.includes(a.id)} onChange={() => toggle(a.id)} />
+                  <span className="fs-sm">{a.name}</span>
+                  <span className="badge-vp badge-vp-info">{a.platform}</span>
+                  {!a.has_cookies && <span className="badge-vp badge-vp-danger">нет кук</span>}
+                  {a.has_cookies && !a.active && <span className="badge-vp badge-vp-muted">выключен</span>}
+                </label>
+              );
+            })}
+          </div>
+          <div className="form-text fs-sm">Каждый аккаунт получит свой рендер — отдельный файл с отдельным хешем.</div>
         </div>
         <div className="col-md-6">
           <label className="form-label vp">Видео</label>
@@ -1090,9 +1129,33 @@ function PostForm({ accounts, videos, banners, onCreated }: {
           <label className="form-label vp">Описание / подпись</label>
           <textarea className="form-control vp" rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Текст поста, #хэштеги" />
         </div>
+        {picked.length > 1 && (
+          <div className="col-12">
+            <label className="form-label vp">Пауза между аккаунтами</label>
+            <div className="d-flex align-items-center gap-2 flex-wrap">
+              <span className="fs-sm text-muted">от</span>
+              <input className="form-control vp form-control-sm" type="number" min={0} max={720} style={{ width: 90 }}
+                     value={spreadMin} onChange={(e) => setSpreadMin(Math.max(0, Number(e.target.value) || 0))} />
+              <span className="fs-sm text-muted">до</span>
+              <input className="form-control vp form-control-sm" type="number" min={0} max={720} style={{ width: 90 }}
+                     value={spreadMax} onChange={(e) => setSpreadMax(Math.max(0, Number(e.target.value) || 0))} />
+              <span className="fs-sm text-muted">минут</span>
+              <div className="form-check form-switch ms-3 mb-0">
+                <input className="form-check-input" type="checkbox" id="varyCaption"
+                       checked={varyCaption} onChange={(e) => setVaryCaption(e.target.checked)} />
+                <label className="form-check-label fs-sm" htmlFor="varyCaption">варьировать подпись</label>
+              </div>
+            </div>
+            <div className="form-text fs-sm">
+              Первый пост уходит сразу, каждый следующий — через случайный интервал из этого диапазона.
+            </div>
+          </div>
+        )}
         <div className="col-12">
-          <button className="btn btn-vp" onClick={submit}>
-            <i className="bi bi-send me-1" />Поставить в очередь
+          <button className="btn btn-vp" disabled={busy || picked.length === 0 || !videoId} onClick={submit}>
+            {busy
+              ? <><span className="spinner-border spinner-border-sm me-2" />Создаю…</>
+              : <><i className="bi bi-send me-1" />Поставить в очередь{picked.length > 1 ? ` (${picked.length})` : ""}</>}
           </button>
         </div>
       </div>
@@ -1126,6 +1189,21 @@ function Jobs({ jobs, accounts, videos, onChange }: {
   }, [jobs, query, accounts, videos]);
   const visible = filtered.slice(0, showCount);
 
+  // Позиция задачи в пачке («группа · 2 из 5»), чтобы мультипост было видно в списке
+  const groupInfo = useMemo(() => {
+    const byGroup = new Map<string, number[]>();
+    for (const j of jobs) {
+      if (!j.group_id) continue;
+      byGroup.set(j.group_id, [...(byGroup.get(j.group_id) ?? []), j.id]);
+    }
+    const info = new Map<number, string>();
+    for (const ids of byGroup.values()) {
+      const sorted = [...ids].sort((a, b) => a - b);
+      sorted.forEach((id, i) => info.set(id, `${i + 1} из ${sorted.length}`));
+    }
+    return info;
+  }, [jobs]);
+
   const statusConfig: Record<Job["status"], { label: string; dot: string; badge: string }> = {
     pending: { label: "ожидает", dot: "pending", badge: "badge-vp-muted" },
     rendering: { label: "рендер", dot: "rendering", badge: "badge-vp-warning" },
@@ -1148,6 +1226,7 @@ function Jobs({ jobs, accounts, videos, onChange }: {
                 <span className={`status-dot ${sc.dot}`} />
                 <span className={`badge-vp ${sc.badge}`}>{sc.label}</span>
                 <span className="fs-sm">{accName(jb.account_id)} &larr; {vidName(jb.video_id)}</span>
+                {jb.group_id && <span className="badge-vp badge-vp-muted"><i className="bi bi-collection me-1" />группа · {groupInfo.get(jb.id) ?? ""}</span>}
                 {jb.scheduled_at && <span className="badge-vp badge-vp-muted"><i className="bi bi-clock me-1" />{new Date(jb.scheduled_at).toLocaleString()}</span>}
               </div>
               <div className="d-flex gap-1">

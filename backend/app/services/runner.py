@@ -62,6 +62,36 @@ def _ensure_session(account, db, log) -> bool:
     return False
 
 
+def _notify_result(db, job: Job, account, *, ok: bool) -> None:
+    """Уведомление в Telegram (no-op, если бот не настроен).
+
+    Для пачки (одно видео на несколько аккаунтов) успехи по отдельности не шлём —
+    иначе десять аккаунтов дают десять сообщений. Вместо этого одно итоговое,
+    когда в группе не осталось незавершённых задач. Ошибки шлём сразу.
+    """
+    try:
+        from .telegram import notify
+
+        if not ok:
+            notify(f"❌ Пост не удался: {account.name} — задача #{job.id}\n{job.error}")
+        elif not job.group_id:
+            notify(f"✅ Пост опубликован: {account.name} [{account.platform.value}] — задача #{job.id}")
+
+        if not job.group_id:
+            return
+        rows = db.query(Job).filter(Job.group_id == job.group_id).all()
+        if any(j.status in (JobStatus.pending, JobStatus.rendering, JobStatus.uploading) for j in rows):
+            return
+        done = sum(1 for j in rows if j.status == JobStatus.done)
+        failed = sum(1 for j in rows if j.status == JobStatus.failed)
+        notify(
+            f"📦 Пачка завершена: опубликовано {done} из {len(rows)}"
+            + (f", ошибок {failed}" if failed else "")
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _parse_overlays(job: Job, db) -> list[dict]:
     """Разбирает job.overlays (JSON от редактора) в список слоёв для ffmpeg.
 
@@ -246,14 +276,7 @@ def run_job(job_id: int) -> None:
             _append_log(job, f"Не удалось опубликовать: {job.error}")
         db.commit()
 
-        try:  # уведомление в Telegram (no-op, если не настроен)
-            from .telegram import notify
-            if result.ok:
-                notify(f"✅ Пост опубликован: {account.name} [{account.platform.value}] — задача #{job.id}")
-            else:
-                notify(f"❌ Пост не удался: {account.name} — задача #{job.id}\n{job.error}")
-        except Exception:  # noqa: BLE001
-            pass
+        _notify_result(db, job, account, ok=result.ok)
     except Exception as e:  # noqa: BLE001
         db.rollback()
         job = db.get(Job, job_id)

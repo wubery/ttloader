@@ -131,6 +131,8 @@ export type Overlay = BannerOverlay | TextOverlayData;
 
 export interface Job {
   id: number;
+  /** Общий id пачки: одно видео, разосланное на несколько аккаунтов */
+  group_id: string | null;
   account_id: number;
   video_id: number;
   banner_id: number | null;
@@ -316,6 +318,24 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Job>(r)),
+
+  /** Одно видео на несколько аккаунтов: у каждого свой рендер и свой хеш */
+  createJobsBulk: (b: {
+    account_ids: number[];
+    video_id: number;
+    banner_id?: number | null;
+    caption?: string;
+    scheduled_at?: string | null;
+    overlays?: Overlay[] | null;
+    spread_min_minutes?: number;
+    spread_max_minutes?: number;
+    vary_caption?: boolean;
+  }) =>
+    fetch("/api/jobs/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(b),
+    }).then((r) => j<{ jobs: Job[]; skipped: string[] }>(r)),
   retryJob: (id: number) => fetch(`/api/jobs/${id}/retry`, { method: "POST" }).then((r) => j<Job>(r)),
   deleteJob: (id: number) => fetch(`/api/jobs/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
 };

@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..models import Account, Banner, Job, JobStatus, Video
-from ..schemas import JobCreate, JobOut
+from ..services import posting
+from ..schemas import JobBulkCreate, JobBulkOut, JobCreate, JobOut
 from ..scheduler import submit_job
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -63,6 +64,32 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
     if job.scheduled_at is None:
         submit_job(job.id)
     return job
+
+
+@router.post("/bulk", response_model=JobBulkOut)
+def create_jobs_bulk(payload: JobBulkCreate, db: Session = Depends(get_db)):
+    """Одно видео → несколько аккаунтов, у каждого свой рендер и свой хеш."""
+    try:
+        jobs, skipped = posting.create_jobs(
+            db,
+            account_ids=payload.account_ids,
+            video_id=payload.video_id,
+            banner_id=payload.banner_id,
+            caption=payload.caption,
+            banner_x=payload.banner_x,
+            banner_y=payload.banner_y,
+            banner_scale=payload.banner_scale,
+            overlays=payload.overlays,
+            scheduled_at=payload.scheduled_at,
+            spread_min=payload.spread_min_minutes,
+            spread_max=payload.spread_max_minutes,
+            vary_caption=payload.vary_caption,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if not jobs:
+        raise HTTPException(400, "Ни одной задачи не создано: " + "; ".join(skipped))
+    return JobBulkOut(jobs=jobs, skipped=skipped)
 
 
 @router.post("/{job_id}/retry", response_model=JobOut)

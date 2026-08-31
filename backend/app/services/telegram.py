@@ -182,7 +182,9 @@ def _handle_update(token: str, allowed: list[str], upd: dict) -> None:
     if allowed and chat_id not in allowed:
         return  # команды только от разрешённых аккаунтов
 
-    text = (msg.get("text") or "").strip().lower()
+    # raw сохраняем: в /newpost есть подпись, а нижний регистр её портил.
+    raw = (msg.get("text") or "").strip()
+    text = raw.lower()
 
     # Команды
     if text.startswith("/start") or text.startswith("/help"):
@@ -207,7 +209,7 @@ def _handle_update(token: str, allowed: list[str], upd: dict) -> None:
         _cmd_proxy(token, chat_id)
         return
     if text.startswith("/newpost"):
-        _cmd_newpost(token, chat_id, text)
+        _cmd_newpost(token, chat_id, raw)
         return
     if text.startswith("/delete"):
         _cmd_delete(token, chat_id, text)
@@ -265,8 +267,9 @@ def _cmd_help(token: str, chat_id: str) -> None:
         "💓 /status — здоровье системы\n"
         "🔍 /proxy — проверить все прокси\n"
         "⚙️ /settings — текущие настройки\n\n"
-        "➕ /newpost <id_аккаунта> <id_видео> [подпись]\n"
-        "   Пример: /newpost 1 3 Мой пост #теги\n\n"
+        "➕ /newpost <аккаунты> <id_видео> [подпись]\n"
+        "   Аккаунты: 1 | 1,2,5 | all — пачка уходит вразнобой по времени\n"
+        "   Пример: /newpost 1,2 3 Мой пост #теги\n\n"
         "🗑 /delete <тип> <id>\n"
         "   Пример: /delete video 5\n\n"
         "📹 Пришли видео — добавлю в библиотеку\n"
@@ -433,46 +436,74 @@ def _cmd_proxy(token: str, chat_id: str) -> None:
 
 
 def _cmd_newpost(token: str, chat_id: str, text: str) -> None:
-    from ..models import Account, Video, Job
+    from ..models import Account, Video
+    from . import posting
 
     parts = text.split(maxsplit=3)
     if len(parts) < 3:
         send_message(token, chat_id,
-            "➕ Использование: /newpost <id_аккаунта> <id_видео> [подпись]\n"
-            "Пример: /newpost 1 3 Мой пост #теги")
+            "➕ Использование: /newpost <аккаунты> <id_видео> [подпись]\n"
+            "Аккаунты: один id, несколько через запятую или all\n"
+            "Примеры:\n"
+            "  /newpost 1 3 Мой пост #теги\n"
+            "  /newpost 1,2,5 3 Мой пост #теги\n"
+            "  /newpost all 3 Мой пост #теги")
         return
-
-    try:
-        acc_id = int(parts[1])
-        vid_id = int(parts[2])
-    except ValueError:
-        send_message(token, chat_id, "❌ ID должны быть числами.")
-        return
-
-    caption = parts[3] if len(parts) > 3 else ""
 
     db = SessionLocal()
     try:
-        acc = db.query(Account).filter(Account.id == acc_id).first()
-        if not acc:
-            send_message(token, chat_id, f"❌ Аккаунт #{acc_id} не найден.")
+        # «all» — все активные аккаунты с куками; иначе список ID через запятую.
+        if parts[1].lower() == "all":
+            acc_ids = [a.id for a in db.query(Account).filter(Account.active.is_(True)).all()
+                       if a.has_cookies]
+            if not acc_ids:
+                send_message(token, chat_id, "❌ Нет активных аккаунтов с куками.")
+                return
+        else:
+            try:
+                acc_ids = [int(p) for p in parts[1].split(",") if p.strip()]
+            except ValueError:
+                send_message(token, chat_id, "❌ ID аккаунтов должны быть числами: 1 или 1,2,5 или all.")
+                return
+        try:
+            vid_id = int(parts[2])
+        except ValueError:
+            send_message(token, chat_id, "❌ ID видео должен быть числом.")
             return
+
+        caption = parts[3] if len(parts) > 3 else ""
         vid = db.query(Video).filter(Video.id == vid_id).first()
         if not vid:
             send_message(token, chat_id, f"❌ Видео #{vid_id} не найдено.")
             return
-        if not acc.cookies_path:
-            send_message(token, chat_id, f"⚠️ У аккаунта «{acc.name}» нет кук. Импортируй их в панели.")
+
+        multi = len(acc_ids) > 1
+        try:
+            jobs, skipped = posting.create_jobs(
+                db,
+                account_ids=acc_ids,
+                video_id=vid_id,
+                caption=caption,
+                # у пачки — разброс по времени и вариации подписи, как в панели
+                spread_min=5 if multi else 0,
+                spread_max=20 if multi else 0,
+                vary_caption=multi,
+            )
+        except ValueError as e:
+            send_message(token, chat_id, f"❌ {e}")
             return
 
-        job = Job(account_id=acc_id, video_id=vid_id, caption=caption)
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        send_message(token, chat_id,
-            f"✅ Задача #{job.id} создана!\n"
-            f"👤 {acc.name} ← 🎥 {vid.title}\n"
-            f"📝 {caption or '(без подписи)'}")
+        if not jobs:
+            send_message(token, chat_id, "❌ Ни одной задачи не создано:\n" + "\n".join(skipped))
+            return
+
+        lines = [f"✅ Создано задач: {len(jobs)} ← 🎥 {vid.title}"]
+        for job in jobs:
+            when = job.scheduled_at.strftime("%H:%M") if job.scheduled_at else "сразу"
+            lines.append(f"  #{job.id} 👤 {job.account.name} — {when}")
+        if skipped:
+            lines.append("⚠️ Пропущены: " + "; ".join(skipped))
+        send_message(token, chat_id, "\n".join(lines))
     finally:
         db.close()
 

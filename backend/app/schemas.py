@@ -221,10 +221,30 @@ class JobCreate(BaseModel):
     overlays: list[dict] | None = None
 
 
+class JobBulkCreate(BaseModel):
+    """Одно видео на несколько аккаунтов: по задаче (и своему рендеру) на каждый."""
+
+    account_ids: list[int]
+    video_id: int
+    banner_id: int | None = None
+    caption: str = ""
+    banner_x: float | None = None
+    banner_y: float | None = None
+    banner_scale: float | None = None
+    scheduled_at: datetime | None = None
+    overlays: list[dict] | None = None
+    # Случайная пауза между аккаунтами, минуты: пачка не уходит залпом.
+    spread_min_minutes: int = 5
+    spread_max_minutes: int = 20
+    # Лёгкие вариации подписи (перестановка хештегов, эмодзи в хвосте).
+    vary_caption: bool = True
+
+
 class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    group_id: str | None
     account_id: int
     video_id: int
     banner_id: int | None
@@ -241,3 +261,10 @@ class JobOut(BaseModel):
     posted_url: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class JobBulkOut(BaseModel):
+    """Результат пачки: что создано и почему часть аккаунтов пропущена."""
+
+    jobs: list[JobOut]
+    skipped: list[str]

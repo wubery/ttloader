@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -21,19 +22,24 @@ from .services.runner import run_job
 _executor = ThreadPoolExecutor(max_workers=settings.max_concurrent_jobs)
 _scheduler = BackgroundScheduler(timezone=settings.timezone)
 _inflight: set[int] = set()
+# _inflight трогают HTTP-поток (создание задач) и поток планировщика; без блокировки
+# проверка и вставка не атомарны — задачу можно запустить дважды.
+_inflight_lock = threading.Lock()
 
 
 def submit_job(job_id: int) -> None:
     """Поставить задачу на немедленное выполнение в пуле потоков."""
-    if job_id in _inflight:
-        return
-    _inflight.add(job_id)
+    with _inflight_lock:
+        if job_id in _inflight:
+            return
+        _inflight.add(job_id)
 
     def _wrapped() -> None:
         try:
             run_job(job_id)
         finally:
-            _inflight.discard(job_id)
+            with _inflight_lock:
+                _inflight.discard(job_id)
 
     _executor.submit(_wrapped)
 

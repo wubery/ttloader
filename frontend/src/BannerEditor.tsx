@@ -413,55 +413,97 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
   onDone: () => void;
 }) {
   const ready = accounts.filter((a) => a.has_cookies && a.active);
-  const [accountId, setAccountId] = useState<number | null>(ready[0]?.id ?? null);
+  const [picked, setPicked] = useState<number[]>(ready[0] ? [ready[0].id] : []);
   const [caption, setCaption] = useState("");
   const [when, setWhen] = useState("");
+  const [spreadMin, setSpreadMin] = useState(5);
+  const [spreadMax, setSpreadMax] = useState(20);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const toggle = (id: number) =>
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
   async function submit() {
-    if (!accountId) return;
+    if (picked.length === 0) return;
     setBusy(true); setErr(null);
     try {
-      await api.createJob({
-        account_id: accountId,
+      const multi = picked.length > 1;
+      const r = await api.createJobsBulk({
+        account_ids: picked,
         video_id: videoId,
         caption,
         scheduled_at: when ? new Date(when).toISOString() : null,
         overlays,
+        spread_min_minutes: multi ? spreadMin : 0,
+        spread_max_minutes: multi ? spreadMax : 0,
+        vary_caption: multi,
       });
+      if (r.skipped.length) setErr("Пропущены: " + r.skipped.join("; "));
       onDone();
     } catch (e: any) { setErr(e.message); setBusy(false); }
   }
 
+  // Разметка как у остальных модалок проекта: без d-block бутстраповский .modal скрыт
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal login-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="row between">
-          <b><i className="bi bi-send me-2" />Публикация ({overlays.length} слоёв)</b>
-          <button className="btn btn-sm btn-vp-outline" onClick={onClose}>Закрыть</button>
-        </div>
-        {err && <div className="alert alert-danger py-2 my-2 fs-sm">{err}</div>}
-        <div className="d-flex flex-column gap-2 mt-2">
-          <div>
-            <label className="form-label vp">Аккаунт</label>
-            <select className="form-select vp" value={accountId ?? ""} onChange={(e) => setAccountId(Number(e.target.value) || null)}>
-              <option value="">— выберите —</option>
-              {ready.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.platform})</option>)}
-            </select>
-            {ready.length === 0 && <div className="form-text text-danger fs-sm">Нет аккаунтов с куками — импортируйте их на вкладке «Аккаунты».</div>}
+    <div className="modal d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
+      <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-content vp">
+          <div className="modal-header vp">
+            <h6 className="modal-title"><i className="bi bi-send me-2" />Публикация ({overlays.length} слоёв)</h6>
+            <button className="btn-close btn-close-white" onClick={onClose} />
           </div>
-          <div>
-            <label className="form-label vp">Описание</label>
-            <textarea className="form-control vp" rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} />
+          <div className="modal-body vp">
+            {err && <div className="alert alert-danger py-2 mb-2 fs-sm">{err}</div>}
+            <div className="d-flex flex-column gap-2">
+              <div>
+                <div className="d-flex align-items-center justify-content-between">
+                  <label className="form-label vp mb-0">
+                    Аккаунты{picked.length > 0 && <span className="badge-vp badge-vp-info ms-2">выбрано {picked.length}</span>}
+                  </label>
+                  <div className="d-flex gap-2">
+                    <button className="btn btn-vp-outline btn-sm" onClick={() => setPicked(ready.map((a) => a.id))}>Все</button>
+                    <button className="btn btn-vp-outline btn-sm" disabled={picked.length === 0} onClick={() => setPicked([])}>Снять</button>
+                  </div>
+                </div>
+                <div style={{ maxHeight: 160, overflowY: "auto", border: "1px solid var(--vp-border)", borderRadius: 8, padding: 8 }}>
+                  {ready.map((a) => (
+                    <label key={a.id} className="d-flex align-items-center gap-2 py-1" style={{ cursor: "pointer" }}>
+                      <input type="checkbox" className="form-check-input mt-0"
+                             checked={picked.includes(a.id)} onChange={() => toggle(a.id)} />
+                      <span className="fs-sm">{a.name}</span>
+                      <span className="badge-vp badge-vp-info">{a.platform}</span>
+                    </label>
+                  ))}
+                </div>
+                {ready.length === 0 && <div className="form-text text-danger fs-sm">Нет аккаунтов с куками — импортируйте их на вкладке «Аккаунты».</div>}
+              </div>
+              <div>
+                <label className="form-label vp">Описание</label>
+                <textarea className="form-control vp" rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} />
+              </div>
+              <div>
+                <label className="form-label vp">Время публикации (пусто — сразу)</label>
+                <input className="form-control vp" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+              </div>
+              {picked.length > 1 && (
+                <div className="d-flex align-items-center gap-2 flex-wrap">
+                  <span className="fs-sm text-muted">пауза между аккаунтами: от</span>
+                  <input className="form-control vp form-control-sm" type="number" min={0} max={720} style={{ width: 80 }}
+                         value={spreadMin} onChange={(e) => setSpreadMin(Math.max(0, Number(e.target.value) || 0))} />
+                  <span className="fs-sm text-muted">до</span>
+                  <input className="form-control vp form-control-sm" type="number" min={0} max={720} style={{ width: 80 }}
+                         value={spreadMax} onChange={(e) => setSpreadMax(Math.max(0, Number(e.target.value) || 0))} />
+                  <span className="fs-sm text-muted">мин; подпись варьируется</span>
+                </div>
+              )}
+              <button className="btn btn-vp" disabled={busy || picked.length === 0} onClick={submit}>
+                {busy
+                  ? <><span className="spinner-border spinner-border-sm me-2" />Создаю…</>
+                  : <>Создать {picked.length > 1 ? `${picked.length} задач` : "задачу"}</>}
+              </button>
+            </div>
           </div>
-          <div>
-            <label className="form-label vp">Время публикации (пусто — сразу)</label>
-            <input className="form-control vp" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
-          </div>
-          <button className="btn btn-vp" disabled={busy || !accountId} onClick={submit}>
-            {busy ? <><span className="spinner-border spinner-border-sm me-2" />Создаю…</> : <>Создать задачу</>}
-          </button>
         </div>
       </div>
     </div>

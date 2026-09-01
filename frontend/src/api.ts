@@ -13,6 +13,8 @@ export interface Account {
   proxy_ip: string | null;
   proxy_checked_at: string | null;
   uniqueize: boolean;
+  /** Профиль уникализации, закреплённый за аккаунтом */
+  uniq_profile_id: number | null;
   active: boolean;
   has_cookies: boolean;
   created_at: string;
@@ -129,10 +131,37 @@ export interface TextOverlayData {
 
 export type Overlay = BannerOverlay | TextOverlayData;
 
+export interface Hook {
+  id: number;
+  name: string;
+  filename: string;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  created_at: string;
+}
+
+export interface OverlayAsset {
+  id: number;
+  name: string;
+  filename: string;
+  created_at: string;
+}
+
+/** Профиль уникализации: каждый параметр — диапазон [от, до]; равные границы = ручное значение */
+export interface UniqProfile {
+  id: number;
+  name: string;
+  params: Record<string, any>;
+  is_default: boolean;
+  created_at: string;
+}
+
 export interface Job {
   id: number;
   /** Общий id пачки: одно видео, разосланное на несколько аккаунтов */
   group_id: string | null;
+  uniq_profile_id: number | null;
   account_id: number;
   video_id: number;
   banner_id: number | null;
@@ -228,7 +257,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Account>(r)),
-  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean } & AccountCredentials>) =>
+  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean; uniq_profile_id: number | null } & AccountCredentials>) =>
     fetch(`/api/accounts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -272,6 +301,40 @@ export const api = {
     fetch(`/api/accounts/${id}/mail/connect`, { method: "POST" }).then((r) => j<MailConnect>(r)),
   mailConnectState: (id: number) =>
     fetch(`/api/accounts/${id}/mail/connect/state`).then((r) => j<MailConnectState>(r)),
+
+  // hooks / overlays / профили уникализации
+  hooks: () => fetch("/api/hooks").then((r) => j<Hook[]>(r)),
+  uploadHook: (file: File, name: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", name);
+    return fetch("/api/hooks", { method: "POST", body: fd }).then((r) => j<Hook>(r));
+  },
+  deleteHook: (id: number) => fetch(`/api/hooks/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  hookFileUrl: (id: number) => `/api/hooks/${id}/file`,
+
+  overlayAssets: () => fetch("/api/overlays").then((r) => j<OverlayAsset[]>(r)),
+  uploadOverlayAsset: (file: File, name: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", name);
+    return fetch("/api/overlays", { method: "POST", body: fd }).then((r) => j<OverlayAsset>(r));
+  },
+  deleteOverlayAsset: (id: number) => fetch(`/api/overlays/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  overlayFileUrl: (id: number) => `/api/overlays/${id}/file`,
+
+  uniqProfiles: () => fetch("/api/uniq-profiles").then((r) => j<UniqProfile[]>(r)),
+  uniqDefaults: () => fetch("/api/uniq-profiles/defaults").then((r) => j<Record<string, any>>(r)),
+  createUniqProfile: (b: { name: string; params?: Record<string, any>; is_default?: boolean }) =>
+    fetch("/api/uniq-profiles", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<UniqProfile>(r)),
+  updateUniqProfile: (id: number, b: Partial<{ name: string; params: Record<string, any>; is_default: boolean }>) =>
+    fetch(`/api/uniq-profiles/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<UniqProfile>(r)),
+  deleteUniqProfile: (id: number) => fetch(`/api/uniq-profiles/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  uniqPreviewUrl: (id: number, videoId: number) => `/api/uniq-profiles/${id}/preview?video_id=${videoId}`,
 
   // videos
   videos: () => fetch("/api/videos").then((r) => j<Video[]>(r)),
@@ -327,6 +390,7 @@ export const api = {
     caption?: string;
     scheduled_at?: string | null;
     overlays?: Overlay[] | null;
+    uniq_profile_id?: number | null;
     spread_min_minutes?: number;
     spread_max_minutes?: number;
     vary_caption?: boolean;

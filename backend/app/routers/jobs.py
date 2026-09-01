@@ -54,6 +54,7 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
         # слои редактора храним JSON-строкой
         overlays=json.dumps(payload.overlays, ensure_ascii=False) if payload.overlays else None,
         scheduled_at=payload.scheduled_at,
+        uniq_profile_id=payload.uniq_profile_id,
         status=JobStatus.pending,
     )
     db.add(job)
@@ -81,6 +82,7 @@ def create_jobs_bulk(payload: JobBulkCreate, db: Session = Depends(get_db)):
             banner_scale=payload.banner_scale,
             overlays=payload.overlays,
             scheduled_at=payload.scheduled_at,
+            uniq_profile_id=payload.uniq_profile_id,
             spread_min=payload.spread_min_minutes,
             spread_max=payload.spread_max_minutes,
             vary_caption=payload.vary_caption,

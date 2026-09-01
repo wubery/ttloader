@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback, createContext, useContext, useMemo } from "react";
 import {
   api, Account, AutoLoginState, Banner, Job, LoginStage, MailConnect, MailConnectState,
-  MailMessage, Platform, SettingsData, SystemVersion, Video,
+  MailMessage, Platform, SettingsData, SystemVersion, UniqProfile, Video,
 } from "./api";
 import { BannerEditor } from "./BannerEditor";
+import { Uniqueizer } from "./Uniqueizer";
 
 /* ================================================================
    Theme Context
@@ -109,7 +110,7 @@ function useConfirm() { return useContext(ConfirmCtx); }
 /* ================================================================
    Tab type
    ================================================================ */
-type Tab = "jobs" | "post" | "editor" | "accounts" | "videos" | "banners" | "proxy" | "stats" | "settings";
+type Tab = "jobs" | "post" | "editor" | "accounts" | "videos" | "banners" | "uniq" | "proxy" | "stats" | "settings";
 
 const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
   { tab: "jobs", icon: "bi-clipboard2-data", label: "Очередь" },
@@ -118,6 +119,7 @@ const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
   { tab: "accounts", icon: "bi-people", label: "Аккаунты" },
   { tab: "videos", icon: "bi-play-circle", label: "Видео" },
   { tab: "banners", icon: "bi-image", label: "Баннеры" },
+  { tab: "uniq", icon: "bi-shuffle", label: "Уникализация" },
   { tab: "proxy", icon: "bi-shield-check", label: "Прокси" },
   { tab: "stats", icon: "bi-bar-chart-line", label: "Статистика" },
   { tab: "settings", icon: "bi-gear", label: "Настройки" },
@@ -125,7 +127,8 @@ const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
 
 const TAB_LABELS: Record<Tab, string> = {
   jobs: "Очередь", post: "Новый пост", editor: "Редактор", accounts: "Аккаунты",
-  videos: "Видео", banners: "Баннеры", proxy: "Прокси", stats: "Статистика", settings: "Настройки",
+  videos: "Видео", banners: "Баннеры", uniq: "Уникализация",
+  proxy: "Прокси", stats: "Статистика", settings: "Настройки",
 };
 
 /* ================================================================
@@ -237,6 +240,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
   const [banners, setBanners] = useState<Banner[]>([]);
+  const [profiles, setProfiles] = useState<UniqProfile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [health, setHealth] = useState<any>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -252,8 +256,10 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   async function refreshAll() {
     try {
-      const [a, v, b, j] = await Promise.all([api.accounts(), api.videos(), api.banners(), api.jobs()]);
-      setAccounts(a); setVideos(v); setBanners(b); setJobs(j);
+      const [a, v, b, j, pr] = await Promise.all([
+        api.accounts(), api.videos(), api.banners(), api.jobs(), api.uniqProfiles(),
+      ]);
+      setAccounts(a); setVideos(v); setBanners(b); setJobs(j); setProfiles(pr);
     } catch (e: any) { toast.add("error", e.message); }
   }
 
@@ -349,12 +355,13 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         <div className="vp-content vp-tab-enter" key={tab}>
           <SearchCtx.Provider value={{ query: search, set: setSearch }}>
             {tab === "jobs" && <Jobs jobs={jobs} accounts={accounts} videos={videos} onChange={refreshAll} />}
-            {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} onCreated={() => { refreshAll(); setTab("jobs"); }} />}
+            {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} profiles={profiles} onCreated={() => { refreshAll(); setTab("jobs"); }} />}
             {tab === "editor" && <BannerEditor videos={videos} banners={banners} accounts={accounts}
               onSaved={refreshAll} onPosted={() => { refreshAll(); setTab("jobs"); }} />}
-            {tab === "accounts" && <Accounts accounts={accounts} onChange={refreshAll} />}
+            {tab === "accounts" && <Accounts accounts={accounts} profiles={profiles} onChange={refreshAll} />}
             {tab === "videos" && <Videos videos={videos} onChange={refreshAll} />}
             {tab === "banners" && <Banners banners={banners} onChange={refreshAll} />}
+            {tab === "uniq" && <Uniqueizer videos={videos} />}
             {tab === "proxy" && <ProxyManager accounts={accounts} onChange={refreshAll} />}
             {tab === "stats" && <Stats jobs={jobs} accounts={accounts} videos={videos} />}
             {tab === "settings" && <Settings />}
@@ -368,7 +375,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 /* ================================================================
    Accounts
    ================================================================ */
-function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () => void }) {
+function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profiles: UniqProfile[]; onChange: () => void }) {
   const [name, setName] = useState("");
   const [platform, setPlatform] = useState<Platform>("tiktok");
   const [proxy, setProxy] = useState("");
@@ -530,6 +537,13 @@ function Accounts({ accounts, onChange }: { accounts: Account[]; onChange: () =>
                   onChange={(e) => api.updateAccount(a.id, { uniqueize: e.target.checked }).then(onChange).catch((x) => toast.add("error", x.message))} />
                 уникализация
               </label>
+              <select className="form-select vp form-select-sm" style={{ maxWidth: 210 }}
+                      title="Профиль уникализации" value={a.uniq_profile_id ?? ""}
+                      onChange={(e) => api.updateAccount(a.id, { uniq_profile_id: Number(e.target.value) || null })
+                        .then(onChange).catch((x) => toast.add("error", x.message))}>
+                <option value="">уникализация: по умолчанию</option>
+                {profiles.map((p) => <option key={p.id} value={p.id}>профиль: {p.name}</option>)}
+              </select>
               <ProxyEditor a={a} onChange={onChange} />
             </div>
           </div>
@@ -1034,8 +1048,8 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
 /* ================================================================
    Post Form
    ================================================================ */
-function PostForm({ accounts, videos, banners, onCreated }: {
-  accounts: Account[]; videos: Video[]; banners: Banner[]; onCreated: () => void;
+function PostForm({ accounts, videos, banners, profiles, onCreated }: {
+  accounts: Account[]; videos: Video[]; banners: Banner[]; profiles: UniqProfile[]; onCreated: () => void;
 }) {
   const [picked, setPicked] = useState<number[]>([]);
   const [videoId, setVideoId] = useState<number | null>(null);
@@ -1045,6 +1059,7 @@ function PostForm({ accounts, videos, banners, onCreated }: {
   const [spreadMin, setSpreadMin] = useState(5);
   const [spreadMax, setSpreadMax] = useState(20);
   const [varyCaption, setVaryCaption] = useState(true);
+  const [profileId, setProfileId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -1065,6 +1080,7 @@ function PostForm({ accounts, videos, banners, onCreated }: {
         spread_min_minutes: picked.length > 1 ? spreadMin : 0,
         spread_max_minutes: picked.length > 1 ? spreadMax : 0,
         vary_caption: picked.length > 1 && varyCaption,
+        uniq_profile_id: profileId,
       });
       toast.add("success", `Создано задач: ${r.jobs.length}`);
       if (r.skipped.length) toast.add("warning", "Пропущены: " + r.skipped.join("; "));
@@ -1119,6 +1135,14 @@ function PostForm({ accounts, videos, banners, onCreated }: {
           <select className="form-select vp" value={bannerId ?? ""} onChange={(e) => setBannerId(Number(e.target.value) || null)}>
             <option value="">— без баннера —</option>
             {banners.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div className="col-md-6">
+          <label className="form-label vp">Профиль уникализации</label>
+          <select className="form-select vp" value={profileId ?? ""}
+                  onChange={(e) => setProfileId(Number(e.target.value) || null)}>
+            <option value="">— как у аккаунта —</option>
+            {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.is_default ? " (по умолчанию)" : ""}</option>)}
           </select>
         </div>
         <div className="col-md-6">

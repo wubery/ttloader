@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Account, Banner, Motion, Overlay, Video } from "./api";
+import { api, Account, Banner, Motion, Overlay, Video , UniqProfile } from "./api";
 
 /**
  * Редактор слоёв: несколько баннеров + текстовые надписи поверх видео.
@@ -420,6 +420,10 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
   const [spreadMax, setSpreadMax] = useState(20);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<UniqProfile[]>([]);
+  const [profileId, setProfileId] = useState<number | null>(null);
+
+  useEffect(() => { api.uniqProfiles().then(setProfiles).catch(() => {}); }, []);
 
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -438,6 +442,7 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
         spread_min_minutes: multi ? spreadMin : 0,
         spread_max_minutes: multi ? spreadMax : 0,
         vary_caption: multi,
+        uniq_profile_id: profileId,
       });
       if (r.skipped.length) setErr("Пропущены: " + r.skipped.join("; "));
       onDone();
@@ -477,6 +482,14 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
                   ))}
                 </div>
                 {ready.length === 0 && <div className="form-text text-danger fs-sm">Нет аккаунтов с куками — импортируйте их на вкладке «Аккаунты».</div>}
+              </div>
+              <div>
+                <label className="form-label vp">Профиль уникализации</label>
+                <select className="form-select vp" value={profileId ?? ""}
+                        onChange={(e) => setProfileId(Number(e.target.value) || null)}>
+                  <option value="">— как у аккаунта —</option>
+                  {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.is_default ? " (по умолчанию)" : ""}</option>)}
+                </select>
               </div>
               <div>
                 <label className="form-label vp">Описание</label>

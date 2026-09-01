@@ -26,36 +26,68 @@ class VideoInfo:
     width: int
     height: int
     duration: float
+    # Нужны для склейки сегментов: concat требует одинаковых fps/размера, а
+    # concat=a=1 падает, если у одного из сегментов нет звука.
+    fps: float = 30.0
+    has_audio: bool = False
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+# Рендер длинного конвейера может идти минутами, но не часами: без таймаута
+# зависший ffmpeg держит воркер постинга навсегда.
+FFMPEG_TIMEOUT = 30 * 60
+
+
+def _run(cmd: list[str], timeout: int | None = FFMPEG_TIMEOUT) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=timeout)
     except FileNotFoundError as e:
         raise MediaError(
             f"Не найден бинарник: {cmd[0]}. Установите ffmpeg и/или укажите путь в .env "
             f"(FFMPEG_BIN / FFPROBE_BIN)."
         ) from e
+    except subprocess.TimeoutExpired as e:
+        raise MediaError(
+            f"{os.path.basename(cmd[0])} не уложился в {timeout} с и был остановлен."
+        ) from e
     except subprocess.CalledProcessError as e:
         raise MediaError(f"{os.path.basename(cmd[0])} завершился с ошибкой:\n{e.stderr[-2000:]}") from e
+
+
+def _parse_fps(raw: str | None) -> float:
+    """«30000/1001» → 29.97. Мусор и нули превращаем в 30."""
+    if not raw:
+        return 30.0
+    try:
+        if "/" in raw:
+            num, den = raw.split("/", 1)
+            val = float(num) / float(den) if float(den) else 0.0
+        else:
+            val = float(raw)
+    except (ValueError, ZeroDivisionError):
+        return 30.0
+    return val if 0.1 < val < 240 else 30.0
 
 
 def probe(path: str) -> VideoInfo:
     cmd = [
         settings.ffprobe_bin, "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height:format=duration",
+        "-show_entries", "stream=index,codec_type,width,height,avg_frame_rate:format=duration",
         "-of", "json", path,
     ]
-    out = _run(cmd).stdout
+    out = _run(cmd, timeout=120).stdout
     data = json.loads(out)
-    stream = (data.get("streams") or [{}])[0]
+    streams = data.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
     fmt = data.get("format") or {}
+    if video is None:
+        raise MediaError(f"В файле нет видеодорожки: {path}")
     try:
         return VideoInfo(
-            width=int(stream["width"]),
-            height=int(stream["height"]),
+            width=int(video["width"]),
+            height=int(video["height"]),
             duration=float(fmt.get("duration", 0.0) or 0.0),
+            fps=_parse_fps(video.get("avg_frame_rate")),
+            has_audio=any(s.get("codec_type") == "audio" for s in streams),
         )
     except (KeyError, ValueError) as e:
         raise MediaError(f"Не удалось определить параметры видео: {path}") from e
@@ -189,23 +221,30 @@ def _find_font() -> str | None:
     return None
 
 
-def render_with_overlays(
-    video_path: str,
-    overlays: list[dict],
-    output_path: str,
-    uniqueize: bool = True,
-) -> str:
-    """Вжигает несколько слоёв в видео и (опц.) уникализирует.
+@dataclass
+class LayerBuild:
+    """Результат сборки слоёв редактора: звенья графа, доп. входы, финальная метка."""
 
-    overlays — список слоёв в порядке отрисовки (нижний → верхний):
-      {"type":"banner","path":"/data/banners/x.png","is_video":false,
-       "x":0.05,"y":0.05,"scale":0.25,"opacity":1.0,"motion":"none","motion_speed":1.0}
-      {"type":"text","text":"Привет","x":0.5,"y":0.5,"font_size":0.06,
-       "color":"#ffffff","opacity":1.0}
-    Координаты — доли кадра (0..1); font_size — доля высоты кадра (или пиксели, если > 1).
-    Необязательные "start"/"end" (секунды) ограничивают показ слоя по времени.
+    chains: list[str]
+    inputs: list[str]          # готовые аргументы -i (со -stream_loop для видео-баннеров)
+    out_label: str
+    tmp_texts: list[str]       # временные файлы с текстом — удалить после запуска ffmpeg
+
+
+def build_layers_chain(
+    overlays: list[dict],
+    *,
+    src_label: str,
+    next_input: int,
+    width: int,
+    height: int,
+    duration: float,
+) -> LayerBuild:
+    """Строит цепочку слоёв (баннеры и текст) поверх произвольной входной метки.
+
+    Вынесено из render_with_overlays, чтобы те же слои можно было положить и на
+    результат склейки хука с видео, не дублируя логику экранирования.
     """
-    info = probe(video_path)
     font = _find_font()
 
     def timing(ov: dict) -> str:
@@ -217,17 +256,17 @@ def render_with_overlays(
         if start is None and end is None:
             return ""
         s = max(0.0, float(start or 0.0))
-        e = float(end) if end is not None else max(s, info.duration or s)
+        e = float(end) if end is not None else max(s, duration or s)
         if e <= s:
             return ""
         return rf":enable=between(t\,{s:.3f}\,{e:.3f})"
 
-    cmd: list[str] = [settings.ffmpeg_bin, "-y", "-i", video_path]
     chains: list[str] = []
-    cur = "[0:v]"          # текущая метка видеопотока
-    inp = 1                # индекс следующего входного файла
+    inputs: list[str] = []
+    tmp_texts: list[str] = []
+    cur = src_label
+    inp = next_input
     step = 0
-    tmp_texts: list[str] = []   # временные файлы с текстом (удаляем в finally)
 
     for ov in overlays:
         kind = (ov.get("type") or "banner").lower()
@@ -238,13 +277,13 @@ def render_with_overlays(
                 continue  # пропускаем недостающий файл, а не роняем всю задачу
             is_video = bool(ov.get("is_video"))
             if is_video:
-                cmd += ["-stream_loop", "-1", "-i", path]
+                inputs += ["-stream_loop", "-1", "-i", path]
             else:
-                cmd += ["-i", path]
+                inputs += ["-i", path]
 
             scale = float(ov.get("scale", 0.25) or 0.25)
             opacity = float(ov.get("opacity", 1.0) or 1.0)
-            target_w = max(1, round(scale * info.width))
+            target_w = max(1, round(scale * width))
             parts = [f"[{inp}:v]scale={target_w}:-1"]
             if opacity < 0.999:
                 parts.append(f"format=rgba,colorchannelmixer=aa={opacity:.4f}")
@@ -272,7 +311,7 @@ def render_with_overlays(
                 continue
             fs = float(ov.get("font_size", 0.06) or 0.06)
             # доля высоты кадра либо готовые пиксели
-            px = max(8, round(fs * info.height)) if fs <= 1 else max(8, round(fs))
+            px = max(8, round(fs * height)) if fs <= 1 else max(8, round(fs))
             opacity = float(ov.get("opacity", 1.0) or 1.0)
             x = float(ov.get("x", 0.5) or 0.0)
             y = float(ov.get("y", 0.5) or 0.0)
@@ -303,6 +342,39 @@ def render_with_overlays(
             chains.append(f"{cur}drawtext={':'.join(args)}{timing(ov)}{out_lbl}")
             cur = out_lbl
             step += 1
+
+    return LayerBuild(chains=chains, inputs=inputs, out_label=cur, tmp_texts=tmp_texts)
+
+
+def render_with_overlays(
+    video_path: str,
+    overlays: list[dict],
+    output_path: str,
+    uniqueize: bool = True,
+) -> str:
+    """Вжигает несколько слоёв в видео и (опц.) уникализирует.
+
+    overlays — список слоёв в порядке отрисовки (нижний → верхний):
+      {"type":"banner","path":"/data/banners/x.png","is_video":false,
+       "x":0.05,"y":0.05,"scale":0.25,"opacity":1.0,"motion":"none","motion_speed":1.0}
+      {"type":"text","text":"Привет","x":0.5,"y":0.5,"font_size":0.06,
+       "color":"#ffffff","opacity":1.0}
+    Координаты — доли кадра (0..1); font_size — доля высоты кадра (или пиксели, если > 1).
+    Необязательные "start"/"end" (секунды) ограничивают показ слоя по времени.
+    """
+    info = probe(video_path)
+    built = build_layers_chain(
+        overlays,
+        src_label="[0:v]",
+        next_input=1,
+        width=info.width,
+        height=info.height,
+        duration=info.duration,
+    )
+    cmd: list[str] = [settings.ffmpeg_bin, "-y", "-i", video_path] + built.inputs
+    chains = built.chains
+    cur = built.out_label
+    tmp_texts = built.tmp_texts
 
     try:
         if not chains:

@@ -6,6 +6,7 @@ Playwright sync API нельзя запускать внутри работаю�
 from __future__ import annotations
 
 import json
+import random
 import os
 import time
 from datetime import datetime
@@ -13,7 +14,7 @@ from datetime import datetime
 from ..config import settings
 from ..db import SessionLocal
 from ..models import Banner, BannerType, Job, JobStatus
-from . import media
+from . import media, uniqueizer
 from .uploaders import get_uploader, parse_proxy
 from .uploaders.base import UploadError
 
@@ -60,6 +61,65 @@ def _ensure_session(account, db, log) -> bool:
             return False
     log("Вход не завершился за 7 минут.")
     return False
+
+
+def _resolve_profile(job: Job, account, db):
+    """Профиль задачи → профиль аккаунта → профиль по умолчанию → None.
+
+    None означает «работает старое поведение по флагу Account.uniqueize».
+    """
+    from ..models import UniqProfile
+
+    for pid in (getattr(job, "uniq_profile_id", None), getattr(account, "uniq_profile_id", None)):
+        if pid:
+            row = db.get(UniqProfile, pid)
+            if row is not None:
+                return row
+    if not bool(getattr(account, "uniqueize", True)):
+        return None      # уникализация у аккаунта выключена — профиль по умолчанию не навязываем
+    return db.query(UniqProfile).filter(UniqProfile.is_default.is_(True)).first()
+
+
+def _pick_assets(params: dict, db) -> tuple[str | None, str | None]:
+    """Выбирает файлы хука и оверлея по настройкам профиля (конкретный или случайный)."""
+    from ..models import Hook, OverlayAsset
+
+    hook_path = None
+    hook_cfg = params.get("hook") or {}
+    if hook_cfg.get("on"):
+        row = db.get(Hook, hook_cfg["asset_id"]) if hook_cfg.get("asset_id") else None
+        if row is None and hook_cfg.get("random", True):
+            rows = db.query(Hook).all()
+            row = random.choice(rows) if rows else None
+        if row is not None:
+            path = os.path.join(settings.hooks_dir, row.filename)
+            hook_path = path if os.path.exists(path) else None
+
+    overlay_png = None
+    ov_cfg = params.get("overlay") or {}
+    if ov_cfg.get("on"):
+        row = db.get(OverlayAsset, ov_cfg["asset_id"]) if ov_cfg.get("asset_id") else None
+        if row is None and ov_cfg.get("random", True):
+            rows = db.query(OverlayAsset).all()
+            row = random.choice(rows) if rows else None
+        if row is not None:
+            path = os.path.join(settings.overlays_dir, row.filename)
+            overlay_png = path if os.path.exists(path) else None
+
+    return hook_path, overlay_png
+
+
+def _live_log_render(job: Job, db):
+    """Пишет строки конвейера в лог задачи — видно, какие параметры разыгрались."""
+
+    def _log(msg: str) -> None:
+        try:
+            _append_log(job, msg)
+            db.commit()
+        except Exception:  # noqa: BLE001 — лог не должен ронять рендер
+            db.rollback()
+
+    return _log
 
 
 def _notify_result(db, job: Job, account, *, ok: bool) -> None:
@@ -150,7 +210,39 @@ def run_job(job_id: int) -> None:
         # 0) Слои редактора (несколько баннеров + текст) — приоритетнее одиночного баннера
         overlays = _parse_overlays(job, db)
 
-        if overlays:
+        # 0a) Профиль уникализации, если он задан: полный конвейер одним проходом,
+        # слои редактора идут внутрь того же графа.
+        profile = _resolve_profile(job, account, db)
+        if profile is not None:
+            job.status = JobStatus.rendering
+            _append_log(job, f"Уникализация по профилю «{profile.name}»…")
+            db.commit()
+            out_name = f"job{job.id}_{int(datetime.now().timestamp())}.mp4"
+            out_path = os.path.join(settings.output_dir, out_name)
+            try:
+                params = json.loads(profile.params) if profile.params else {}
+                hook_path, overlay_png = _pick_assets(params, db)
+                uniqueizer.render(
+                    video_path=video_path,
+                    output_path=out_path,
+                    params=params,
+                    hook_path=hook_path,
+                    overlay_png=overlay_png,
+                    editor_overlays=overlays or None,
+                    log=_live_log_render(job, db),
+                )
+            except (media.MediaError, ValueError) as e:
+                job.status = JobStatus.failed
+                job.error = str(e)
+                _append_log(job, f"Ошибка ffmpeg: {e}")
+                db.commit()
+                return
+            job.output_filename = out_name
+            source_path = out_path
+            _append_log(job, "Уникализация готова.")
+            db.commit()
+
+        elif overlays:
             job.status = JobStatus.rendering
             _append_log(job, f"Накладываю слои ({len(overlays)}) через ffmpeg…")
             db.commit()

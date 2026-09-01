@@ -40,6 +40,7 @@ def create_jobs(
     banner_scale: float | None = None,
     overlays: list[dict] | None = None,
     scheduled_at: datetime | None = None,
+    uniq_profile_id: int | None = None,
     spread_min: int = 0,
     spread_max: int = 0,
     vary_caption: bool = False,
@@ -97,6 +98,7 @@ def create_jobs(
                 banner_scale=banner_scale,
                 overlays=overlays_json,
                 scheduled_at=when,
+                uniq_profile_id=uniq_profile_id,
                 status=JobStatus.pending,
             )
         )

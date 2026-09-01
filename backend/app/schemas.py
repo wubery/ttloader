@@ -27,6 +27,7 @@ class AccountCreate(BaseModel):
 
 class AccountUpdate(BaseModel):
     name: str | None = None
+    uniq_profile_id: int | None = None
     proxy_url: str | None = None
     active: bool | None = None
     uniqueize: bool | None = None
@@ -52,6 +53,7 @@ class AccountOut(BaseModel):
     proxy_ip: str | None
     proxy_checked_at: datetime | None
     uniqueize: bool
+    uniq_profile_id: int | None
     active: bool
     has_cookies: bool
     created_at: datetime
@@ -179,6 +181,48 @@ class VideoOut(BaseModel):
     created_at: datetime
 
 
+# ---------- Hooks / Overlays / Uniq-профили ----------
+class HookOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    filename: str
+    width: int | None
+    height: int | None
+    duration: float | None
+    created_at: datetime
+
+
+class OverlayAssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    filename: str
+    created_at: datetime
+
+
+class UniqProfileCreate(BaseModel):
+    name: str
+    params: dict | None = None
+    is_default: bool = False
+
+
+class UniqProfileUpdate(BaseModel):
+    name: str | None = None
+    params: dict | None = None
+    is_default: bool | None = None
+
+
+class UniqProfileOut(BaseModel):
+    id: int
+    name: str
+    params: dict          # наружу отдаём разобранным объектом, а не строкой
+    is_default: bool
+    created_at: datetime
+
+
 # ---------- Banners ----------
 class BannerUpdate(BaseModel):
     name: str | None = None
@@ -208,6 +252,7 @@ class BannerOut(BaseModel):
 
 # ---------- Jobs ----------
 class JobCreate(BaseModel):
+    uniq_profile_id: int | None = None
     account_id: int
     video_id: int
     banner_id: int | None = None
@@ -224,6 +269,7 @@ class JobCreate(BaseModel):
 class JobBulkCreate(BaseModel):
     """Одно видео на несколько аккаунтов: по задаче (и своему рендеру) на каждый."""
 
+    uniq_profile_id: int | None = None
     account_ids: list[int]
     video_id: int
     banner_id: int | None = None
@@ -245,6 +291,7 @@ class JobOut(BaseModel):
 
     id: int
     group_id: str | None
+    uniq_profile_id: int | None
     account_id: int
     video_id: int
     banner_id: int | None

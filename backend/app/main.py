@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 
 from .config import settings
 from .db import SessionLocal, init_db
-from .routers import accounts, auth, banners, jobs, settings as settings_router, system, videos
+from .routers import (accounts, auth, banners, hooks, jobs, overlays,
+                      settings as settings_router, system, uniq_profiles, videos)
 from .scheduler import shutdown_scheduler, start_scheduler
 from .services import telegram
 from .services.appsettings import bootstrap_settings, get_settings_row
@@ -62,6 +63,9 @@ app.include_router(system.router)
 app.include_router(accounts.router)
 app.include_router(videos.router)
 app.include_router(banners.router)
+app.include_router(hooks.router)
+app.include_router(overlays.router)
+app.include_router(uniq_profiles.router)
 app.include_router(jobs.router)
 
 

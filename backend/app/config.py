@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     banners_dir: str = str(BASE_DIR / "data" / "banners")
     output_dir: str = str(BASE_DIR / "data" / "output")
     cookies_dir: str = str(BASE_DIR / "data" / "cookies")
+    hooks_dir: str = str(BASE_DIR / "data" / "hooks")
+    overlays_dir: str = str(BASE_DIR / "data" / "overlays")
 
     # Внешние бинарники
     ffmpeg_bin: str = "ffmpeg"
@@ -39,7 +41,8 @@ class Settings(BaseSettings):
     session_check_hours: int = 6
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir, self.cookies_dir):
+        for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir,
+                  self.cookies_dir, self.hooks_dir, self.overlays_dir):
             Path(d).mkdir(parents=True, exist_ok=True)
 
 

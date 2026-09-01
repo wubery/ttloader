@@ -63,6 +63,8 @@ class Account(Base):
     proxy_checked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     # Уникализация видео (подмена хеша/фингерпринта) перед постингом
     uniqueize: Mapped[bool] = mapped_column(default=True, server_default="1")
+    # Профиль уникализации, закреплённый за аккаунтом (можно переопределить в задаче)
+    uniq_profile_id: Mapped[int | None] = mapped_column(ForeignKey("uniq_profiles.id"), default=None)
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -122,6 +124,57 @@ class Video(Base):
     jobs: Mapped[list[Job]] = relationship(back_populates="video")
 
 
+class Hook(Base):
+    """Хук — короткая заставка, которая клеится в начало ролика.
+
+    Хранится отдельно от библиотеки видео, чтобы заставки не мешались в списках
+    при выборе основного ролика.
+    """
+
+    __tablename__ = "hooks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    filename: Mapped[str] = mapped_column(String(500))  # относительно hooks_dir
+    width: Mapped[int | None] = mapped_column(Integer, default=None)
+    height: Mapped[int | None] = mapped_column(Integer, default=None)
+    duration: Mapped[float | None] = mapped_column(Float, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class OverlayAsset(Base):
+    """Полнокадровый PNG-оверлей (текстура, рамка, лёгкая засветка).
+
+    Не путать со слоями редактора: этот файл растягивается на весь кадр и
+    накладывается с небольшой прозрачностью как часть уникализации.
+    """
+
+    __tablename__ = "overlay_assets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    filename: Mapped[str] = mapped_column(String(500))  # относительно overlays_dir
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UniqProfile(Base):
+    """Профиль уникализации: набор диапазонов, из которых берутся значения.
+
+    Ручной режим — это тот же профиль с равными границами диапазона; авто —
+    широкие границы, из которых на каждый рендер разыгрывается своё значение.
+    Параметры храним JSON-строкой (как Job.overlays), чтобы не заводить колонку
+    на каждый из трёх десятков параметров.
+    """
+
+    __tablename__ = "uniq_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    params: Mapped[str | None] = mapped_column(Text, default=None)
+    is_default: Mapped[bool] = mapped_column(default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Banner(Base):
     """Баннер (водяной знак). Картинка или зацикленное видео.
     Позиция/масштаб задаются в панели как доля от размера кадра (0..1),
@@ -167,6 +220,8 @@ class Job(Base):
     # Общий идентификатор пачки: одно видео, разосланное на несколько аккаунтов.
     # Нужен, чтобы показать группу в очереди и слать одно итоговое уведомление.
     group_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    # Профиль уникализации для этой задачи; None — берётся из аккаунта/умолчания
+    uniq_profile_id: Mapped[int | None] = mapped_column(ForeignKey("uniq_profiles.id"), default=None)
 
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.pending)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)

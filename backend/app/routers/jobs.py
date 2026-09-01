@@ -12,7 +12,7 @@ from ..config import settings
 from ..db import get_db
 from ..models import Account, Banner, Job, JobStatus, Video
 from ..services import posting
-from ..schemas import JobBulkCreate, JobBulkOut, JobCreate, JobOut
+from ..schemas import JobBulkCreate, JobBulkOut, JobCreate, JobOut, JobPartsCreate
 from ..scheduler import submit_job
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -86,6 +86,34 @@ def create_jobs_bulk(payload: JobBulkCreate, db: Session = Depends(get_db)):
             spread_min=payload.spread_min_minutes,
             spread_max=payload.spread_max_minutes,
             vary_caption=payload.vary_caption,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if not jobs:
+        raise HTTPException(400, "Ни одной задачи не создано: " + "; ".join(skipped))
+    return JobBulkOut(jobs=jobs, skipped=skipped)
+
+
+@router.post("/parts", response_model=JobBulkOut)
+def create_jobs_parts(payload: JobPartsCreate, db: Session = Depends(get_db)):
+    """Режет длинное видео на части: на каждый аккаунт — вся серия с интервалом."""
+    try:
+        jobs, skipped = posting.create_part_jobs(
+            db,
+            account_ids=payload.account_ids,
+            video_id=payload.video_id,
+            parts=payload.parts,
+            caption=payload.caption,
+            caption_template=payload.caption_template,
+            label_on=payload.label_on,
+            banner_id=payload.banner_id,
+            overlays=payload.overlays,
+            scheduled_at=payload.scheduled_at,
+            uniq_profile_id=payload.uniq_profile_id,
+            part_gap_min=payload.part_gap_min_minutes,
+            part_gap_max=payload.part_gap_max_minutes,
+            spread_min=payload.spread_min_minutes,
+            spread_max=payload.spread_max_minutes,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

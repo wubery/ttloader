@@ -323,12 +323,16 @@ def build_layers_chain(
                 f.write(raw.replace("\n", " "))
             tmp_texts.append(tpath)
 
+            # align=center: x задаёт центр, а не левый угол — иначе подпись «Часть 1/5»
+            # и «Часть 10/12» встанут по-разному
+            align = str(ov.get("align") or "left").lower()
+            x_expr = f"(w*{x:.6f}-text_w/2)" if align == "center" else f"(w*{x:.6f})"
             args = [
                 f"textfile='{tpath}'",
                 # expansion=none обязателен: иначе ffmpeg трактует % как подстановку
                 # (%{...}) и текст с процентами не рисуется вообще.
                 "expansion=none",
-                f"x=(w*{x:.6f})",
+                f"x={x_expr}",
                 f"y=(h*{y:.6f})",
                 f"fontsize={px}",
                 f"fontcolor={_norm_color(ov.get('color'))}@{max(0.0, min(1.0, opacity)):.3f}",

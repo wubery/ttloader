@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # ---------------------------------------------------------------- параметры
@@ -41,6 +41,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
                "color": "#000000", "bg_asset_id": None, "bg_random": True},
     "overlay": {"on": False, "asset_id": None, "random": True, "opacity": [0.05, 0.20]},
     "hook": {"on": False, "asset_id": None, "random": True},
+    "ad": {"on": False, "asset_id": None, "random": True},
     "metadata": {"on": True},
 }
 
@@ -332,6 +333,9 @@ class SegmentInput:
     duration: float
     has_audio: bool
     plan: SegmentPlan
+    # Начало окна внутри файла: для части длинного видео. Обрезка уникализации
+    # (plan.trim_start) считается ОТ ЭТОГО смещения, а не от начала файла.
+    offset: float = 0.0
 
 
 @dataclass
@@ -343,10 +347,11 @@ class BuiltCommand:
 def build_command(
     *,
     ffmpeg_bin: str,
-    main: SegmentInput,
     plan: UniqPlan,
     output_path: str,
+    main: SegmentInput | None = None,
     hook: SegmentInput | None = None,
+    segments: list[SegmentInput] | None = None,
     overlay_png: str | None = None,
     background: str | None = None,
     background_is_video: bool = False,
@@ -360,7 +365,11 @@ def build_command(
     `layers_builder` — media.build_layers_chain (передаётся аргументом, чтобы
     модуль оставался тестируемым без ffmpeg и без циклического импорта).
     """
-    segments = [s for s in (hook, main) if s is not None]   # хук идёт первым
+    # Либо готовый список (части, реклама), либо привычная пара «хук + видео».
+    if segments is None:
+        segments = [s for s in (hook, main) if s is not None]   # хук идёт первым
+    if not segments:
+        raise ValueError("Не задан ни один сегмент для рендера")
     args: list[str] = [ffmpeg_bin, "-y"]
     chains: list[str] = []
     idx = 0
@@ -369,8 +378,9 @@ def build_command(
 
     for n, seg in enumerate(segments):
         # обрезка — на уровне входа: дешевле фильтров и не путает тайминги
-        if seg.plan.trim_start > 0.001:
-            args += ["-ss", f"{seg.plan.trim_start:.3f}"]
+        start = seg.offset + seg.plan.trim_start
+        if start > 0.001:
+            args += ["-ss", f"{start:.3f}"]
         if seg.plan.trim_duration and seg.plan.trim_duration > 0.05:
             args += ["-t", f"{seg.plan.trim_duration:.3f}"]
         args += ["-i", seg.path]
@@ -454,12 +464,28 @@ def build_command(
     return BuiltCommand(args=args, tmp_texts=tmp_texts)
 
 
+def _split_plan(plan: SegmentPlan, cut: float) -> tuple[SegmentPlan, SegmentPlan]:
+    """Делит план части на две половины по точке `cut` (отсчёт от начала части).
+
+    Обе половины получают одинаковую обработку (цвет, наклон, скорость) — иначе на
+    стыке вокруг рекламы будет видно скачок картинки.
+    """
+    total = plan.trim_duration or 0.0
+    cut = max(0.5, min(cut, max(0.5, total - 0.5)))
+    first = replace(plan, trim_duration=cut)
+    second = replace(plan, trim_start=plan.trim_start + cut, trim_duration=max(0.5, total - cut))
+    return first, second
+
+
 def render(
     *,
     video_path: str,
     output_path: str,
     params: dict,
     hook_path: str | None = None,
+    ad_path: str | None = None,
+    part_start: float = 0.0,
+    part_duration: float | None = None,
     overlay_png: str | None = None,
     background: str | None = None,
     background_is_video: bool = False,
@@ -467,40 +493,66 @@ def render(
     seed: int | None = None,
     log=lambda m: None,
 ) -> str:
-    """Полный конвейер уникализации одним проходом ffmpeg."""
+    """Полный конвейер уникализации одним проходом ffmpeg.
+
+    `part_start`/`part_duration` — окно внутри исходника (часть длинного видео).
+    `ad_path` — рекламный ролик: часть разрезается в случайной точке средней трети,
+    реклама вставляется между половинами.
+    """
     from . import media  # локальный импорт: media тянет config, а тут только строки
 
     info = media.probe(video_path)
     hook_info = media.probe(hook_path) if hook_path else None
+    ad_info = media.probe(ad_path) if ad_path else None
 
+    # длительность именно того куска, который публикуем
+    window = part_duration if part_duration and part_duration > 0.1 else info.duration
     rnd = random.Random(seed)
     plan = roll(
         params,
-        duration=info.duration,
+        duration=window,
         rnd=rnd,
         with_hook=hook_info is not None,
         hook_duration=hook_info.duration if hook_info else 0.0,
     )
 
-    main_seg = SegmentInput(
-        path=video_path, width=info.width, height=info.height,
-        duration=info.duration, has_audio=info.has_audio, plan=plan.main,
-    )
-    hook_seg = None
+    segments: list[SegmentInput] = []
     if hook_info and plan.hook:
-        hook_seg = SegmentInput(
+        segments.append(SegmentInput(
             path=hook_path, width=hook_info.width, height=hook_info.height,
             duration=hook_info.duration, has_audio=hook_info.has_audio, plan=plan.hook,
-        )
+        ))
         log(f"Хук: {plan.hook.describe()}")
-    log(f"Видео: {plan.main.describe()}")
+
+    def _video_seg(plan_: SegmentPlan, offset: float) -> SegmentInput:
+        return SegmentInput(
+            path=video_path, width=info.width, height=info.height,
+            duration=info.duration, has_audio=info.has_audio, plan=plan_, offset=offset,
+        )
+
+    if ad_info:
+        # точка разреза — случайно в средней трети части
+        eff = plan.main.trim_duration or window
+        cut = eff * rnd.uniform(1 / 3, 2 / 3)
+        first, second = _split_plan(plan.main, cut)
+        segments.append(_video_seg(first, part_start))
+        segments.append(SegmentInput(
+            path=ad_path, width=ad_info.width, height=ad_info.height,
+            duration=ad_info.duration, has_audio=ad_info.has_audio,
+            plan=roll(params, duration=ad_info.duration, rnd=rnd).main,
+        ))
+        segments.append(_video_seg(second, part_start))
+        log(f"Видео: {plan.main.describe()}; реклама вставлена на {cut:.1f}с "
+            f"({ad_info.duration:.1f}с)")
+    else:
+        segments.append(_video_seg(plan.main, part_start))
+        log(f"Видео: {plan.main.describe()}")
 
     built = build_command(
         ffmpeg_bin=media.settings.ffmpeg_bin,
-        main=main_seg,
+        segments=segments,
         plan=plan,
         output_path=output_path,
-        hook=hook_seg,
         overlay_png=overlay_png,
         background=background,
         background_is_video=background_is_video,

@@ -157,6 +157,20 @@ class OverlayAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class AdClip(Base):
+    """Рекламный ролик: вставляется внутрь части, видео прерывается и продолжается."""
+
+    __tablename__ = "ad_clips"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    filename: Mapped[str] = mapped_column(String(500))   # относительно ads_dir
+    width: Mapped[int | None] = mapped_column(Integer, default=None)
+    height: Mapped[int | None] = mapped_column(Integer, default=None)
+    duration: Mapped[float | None] = mapped_column(Float, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Background(Base):
     """Свой фон под рамку: картинка или видео, растягивается на весь холст.
 
@@ -238,6 +252,11 @@ class Job(Base):
     group_id: Mapped[str | None] = mapped_column(String(32), default=None)
     # Профиль уникализации для этой задачи; None — берётся из аккаунта/умолчания
     uniq_profile_id: Mapped[int | None] = mapped_column(ForeignKey("uniq_profiles.id"), default=None)
+    # Часть длинного видео: окно внутри исходника и номер в серии
+    part_index: Mapped[int | None] = mapped_column(Integer, default=None)
+    part_total: Mapped[int | None] = mapped_column(Integer, default=None)
+    part_start: Mapped[float | None] = mapped_column(Float, default=None)
+    part_duration: Mapped[float | None] = mapped_column(Float, default=None)
 
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.pending)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)

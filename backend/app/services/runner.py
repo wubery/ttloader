@@ -80,9 +80,9 @@ def _resolve_profile(job: Job, account, db):
     return db.query(UniqProfile).filter(UniqProfile.is_default.is_(True)).first()
 
 
-def _pick_assets(params: dict, db) -> tuple[str | None, str | None, str | None, bool]:
-    """Выбирает файлы хука, оверлея и фона по настройкам профиля."""
-    from ..models import Background, Hook, OverlayAsset
+def _pick_assets(params: dict, db) -> tuple[str | None, str | None, str | None, bool, str | None]:
+    """Выбирает файлы хука, оверлея, фона и рекламы по настройкам профиля."""
+    from ..models import AdClip, Background, Hook, OverlayAsset
 
     hook_path = None
     hook_cfg = params.get("hook") or {}
@@ -119,7 +119,41 @@ def _pick_assets(params: dict, db) -> tuple[str | None, str | None, str | None, 
             if os.path.exists(path):
                 background, bg_is_video = path, bool(row.is_video)
 
-    return hook_path, overlay_png, background, bg_is_video
+    ad_path = None
+    ad_cfg = params.get("ad") or {}
+    if ad_cfg.get("on"):
+        row = db.get(AdClip, ad_cfg["asset_id"]) if ad_cfg.get("asset_id") else None
+        if row is None and ad_cfg.get("random", True):
+            rows = db.query(AdClip).all()
+            row = random.choice(rows) if rows else None
+        if row is not None:
+            path = os.path.join(settings.ads_dir, row.filename)
+            ad_path = path if os.path.exists(path) else None
+
+    return hook_path, overlay_png, background, bg_is_video, ad_path
+
+
+def _banner_layer(job: Job, banner) -> list[dict]:
+    """Одиночный баннер задачи в виде слоя для конвейера.
+
+    Ветка профиля рендерит всё одним проходом и знает только про слои редактора,
+    поэтому баннер, выбранный в «Новом посте» (job.banner_id), надо превратить в
+    такой же слой — иначе он не вжигается вовсе.
+    """
+    if banner is None:
+        return []
+    return [{
+        "type": "banner",
+        "path": os.path.join(settings.banners_dir, banner.filename),
+        "is_video": banner.type == BannerType.video,
+        # переопределения задачи приоритетнее сохранённых у баннера
+        "x": job.banner_x if job.banner_x is not None else banner.x,
+        "y": job.banner_y if job.banner_y is not None else banner.y,
+        "scale": job.banner_scale if job.banner_scale is not None else banner.scale,
+        "opacity": banner.opacity,
+        "motion": getattr(banner, "motion", "none") or "none",
+        "motion_speed": getattr(banner, "motion_speed", 1.0) or 1.0,
+    }]
 
 
 def _live_log_render(job: Job, db):
@@ -227,14 +261,17 @@ def run_job(job_id: int) -> None:
         # слои редактора идут внутрь того же графа.
         profile = _resolve_profile(job, account, db)
         if profile is not None:
+            # слоёв редактора нет — берём одиночный баннер задачи, иначе он потеряется
+            layers = overlays or _banner_layer(job, banner)
             job.status = JobStatus.rendering
-            _append_log(job, f"Уникализация по профилю «{profile.name}»…")
+            _append_log(job, f"Уникализация по профилю «{profile.name}»…"
+                             + (" Баннер вжигается в тот же проход." if layers and not overlays else ""))
             db.commit()
             out_name = f"job{job.id}_{int(datetime.now().timestamp())}.mp4"
             out_path = os.path.join(settings.output_dir, out_name)
             try:
                 params = json.loads(profile.params) if profile.params else {}
-                hook_path, overlay_png, background, bg_is_video = _pick_assets(params, db)
+                hook_path, overlay_png, background, bg_is_video, ad_path = _pick_assets(params, db)
                 uniqueizer.render(
                     video_path=video_path,
                     output_path=out_path,
@@ -243,7 +280,10 @@ def run_job(job_id: int) -> None:
                     overlay_png=overlay_png,
                     background=background,
                     background_is_video=bg_is_video,
-                    editor_overlays=overlays or None,
+                    ad_path=ad_path,
+                    part_start=job.part_start or 0.0,
+                    part_duration=job.part_duration,
+                    editor_overlays=layers or None,
                     log=_live_log_render(job, db),
                 )
             except (media.MediaError, ValueError) as e:

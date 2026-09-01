@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Background, Hook, OverlayAsset, UniqProfile, Video } from "./api";
+import { api, AdClip, Background, Hook, OverlayAsset, UniqProfile, Video } from "./api";
 
 /* ================================================================
    Вкладка «Уникализация»: профили + библиотеки хуков и оверлеев.
@@ -101,6 +101,7 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [assets, setAssets] = useState<OverlayAsset[]>([]);
   const [backgrounds, setBackgrounds] = useState<Background[]>([]);
+  const [ads, setAds] = useState<AdClip[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [draft, setDraft] = useState<Params>({});
   const [name, setName] = useState("");
@@ -111,10 +112,10 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
   const current = useMemo(() => profiles.find((p) => p.id === sel) ?? null, [profiles, sel]);
 
   async function reload() {
-    const [p, h, a, bg] = await Promise.all([
-      api.uniqProfiles(), api.hooks(), api.overlayAssets(), api.backgrounds(),
+    const [p, h, a, bg, ad] = await Promise.all([
+      api.uniqProfiles(), api.hooks(), api.overlayAssets(), api.backgrounds(), api.ads(),
     ]);
-    setProfiles(p); setHooks(h); setAssets(a); setBackgrounds(bg);
+    setProfiles(p); setHooks(h); setAssets(a); setBackgrounds(bg); setAds(ad);
     onChange?.();   // селекты профиля в других вкладках берут список из Dashboard
     if (sel === null && p.length) select(p[0]);
   }
@@ -353,6 +354,19 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
             </div>
           </Block>
 
+          <Block title="Реклама внутри ролика"
+                 hint="видео прерывается в случайной точке средней трети, играет ролик, затем продолжение"
+                 on={!!draft.ad?.on} onToggle={(v) => patch("ad", { on: v })}>
+            <div>
+              <label className="form-label vp mb-1">Ролик</label>
+              <select className="form-select vp form-select-sm" value={draft.ad?.asset_id ?? ""}
+                      onChange={(e) => patch("ad", { asset_id: Number(e.target.value) || null })}>
+                <option value="">случайный из библиотеки</option>
+                {ads.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </div>
+          </Block>
+
           <Block title="Стереть метаданные" hint="убирает исходные теги и пишет случайные"
                  on={draft.metadata?.on !== false} onToggle={(v) => patch("metadata", { on: v })} />
         </>
@@ -363,6 +377,12 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
                     accept="video/*" items={hooks}
                     upload={(f, n) => api.uploadHook(f, n)} remove={(id) => api.deleteHook(id)}
                     fileUrl={(id) => api.hookFileUrl(id)} isVideo onChange={reload} />
+
+      <MediaLibrary title="Реклама" icon="bi-megaphone"
+                    hint="Короткие ролики, которые вставляются внутрь части видео."
+                    accept="video/*" items={ads}
+                    upload={(f, n) => api.uploadAd(f, n)} remove={(id) => api.deleteAd(id)}
+                    fileUrl={(id) => api.adFileUrl(id)} isVideo onChange={reload} />
 
       <MediaLibrary title="Фоны" icon="bi-easel"
                     hint="Картинка или видео под рамку: видно по краям вокруг вписанного ролика."
@@ -381,10 +401,11 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
 
 function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUrl, isVideo, onChange }: {
   title: string; icon: string; hint: string; accept: string;
-  items: { id: number; name: string }[];
+  items: { id: number; name: string; is_video?: boolean }[];
   upload: (f: File, name: string) => Promise<any>;
   remove: (id: number) => Promise<any>;
   fileUrl: (id: number) => string;
+  /** Библиотека целиком из видео (хуки, реклама). У фонов тип свой у каждого файла. */
   isVideo?: boolean;
   onChange: () => Promise<void> | void;
 }) {
@@ -415,8 +436,10 @@ function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUr
       <div className="vp-grid mt-3">
         {items.map((it) => (
           <div className="vp-media-card" key={it.id}>
-            {isVideo
-              ? <video src={fileUrl(it.id)} muted className="thumb" />
+            {/* preload+controls обязательны: без них браузер не декодирует первый кадр
+                и вместо превью виден чёрный прямоугольник */}
+            {(isVideo || it.is_video)
+              ? <video src={fileUrl(it.id)} className="thumb" preload="metadata" muted playsInline controls />
               : <img src={fileUrl(it.id)} className="thumb" alt={it.name} />}
             <div className="info"><div className="title" title={it.name}>{it.name}</div></div>
             <div className="actions">

@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -18,6 +21,8 @@ from .config import settings
 from .db import SessionLocal
 from .models import Account, Job, JobStatus
 from .services.runner import run_job
+
+log = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=settings.max_concurrent_jobs)
 _scheduler = BackgroundScheduler(timezone=settings.timezone)
@@ -130,6 +135,47 @@ def _check_sessions() -> None:
         db.close()
 
 
+def _cleanup_output() -> None:
+    """Убирает старьё из output_dir — иначе каталог растёт бесконечно.
+
+    Скриншот сохраняется на КАЖДУЮ публикацию, превью профилей остаются после
+    каждого нажатия «Предпросмотр», а ретраи оставляют осиротевшие рендеры, на
+    которые уже никто не ссылается. Файлы живых задач не трогаем независимо от срока.
+    """
+    keep_days = getattr(settings, "output_keep_days", 14)
+    if not keep_days or keep_days <= 0:
+        return
+    cutoff = time.time() - keep_days * 86400
+    out_dir = settings.output_dir
+    if not os.path.isdir(out_dir):
+        return
+
+    db = SessionLocal()
+    try:
+        alive = {
+            name for (name,) in db.query(Job.output_filename).filter(Job.output_filename.isnot(None))
+        }
+    finally:
+        db.close()
+
+    removed = 0
+    for name in os.listdir(out_dir):
+        if name in alive:
+            continue                       # файл принадлежит существующей задаче
+        if not (name.startswith(("tiktok_", "preview_")) or
+                (name.startswith("job") and name.endswith(".mp4"))):
+            continue                       # чужие файлы не наши — не трогаем
+        path = os.path.join(out_dir, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        log.info("Очистка output_dir: удалено файлов — %s", removed)
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(_poll_due_jobs, "interval", seconds=60, id="poll_due_jobs",
                        replace_existing=True, max_instances=1)
@@ -139,6 +185,8 @@ def start_scheduler() -> None:
     if settings.session_check_hours and settings.session_check_hours > 0:
         _scheduler.add_job(_check_sessions, "interval", hours=settings.session_check_hours,
                            id="check_sessions", replace_existing=True, max_instances=1)
+    _scheduler.add_job(_cleanup_output, "interval", hours=24, id="cleanup_output",
+                       replace_existing=True, max_instances=1)
     _scheduler.start()
 
 

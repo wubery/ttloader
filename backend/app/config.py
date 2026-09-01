@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Корень бэкенда (…/backend)
@@ -20,9 +21,23 @@ class Settings(BaseSettings):
     banners_dir: str = str(BASE_DIR / "data" / "banners")
     output_dir: str = str(BASE_DIR / "data" / "output")
     cookies_dir: str = str(BASE_DIR / "data" / "cookies")
-    hooks_dir: str = str(BASE_DIR / "data" / "hooks")
-    overlays_dir: str = str(BASE_DIR / "data" / "overlays")
-    backgrounds_dir: str = str(BASE_DIR / "data" / "backgrounds")
+    # Библиотеки, добавленные позже. Считаются ОТ data_dir, а не от BASE_DIR: в Docker
+    # переменной окружения на них нет (в отличие от VIDEOS_DIR и прочих), и с прежним
+    # значением файлы уходили в /app/data — внутрь контейнера, мимо тома, а значит
+    # пропадали при каждой пересборке образа. Явный HOOKS_DIR и т.п. по-прежнему главнее.
+    hooks_dir: str | None = None
+    overlays_dir: str | None = None
+    backgrounds_dir: str | None = None
+    ads_dir: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_dirs(self) -> "Settings":
+        base = Path(self.data_dir)
+        for name, folder in (("hooks_dir", "hooks"), ("overlays_dir", "overlays"),
+                             ("backgrounds_dir", "backgrounds"), ("ads_dir", "ads")):
+            if not getattr(self, name):
+                object.__setattr__(self, name, str(base / folder))
+        return self
 
     # Внешние бинарники
     ffmpeg_bin: str = "ffmpeg"
@@ -41,10 +56,13 @@ class Settings(BaseSettings):
     # Часы, а не минуты: каждый вход — запуск браузера и лишний повод для подозрений.
     session_check_hours: int = 6
 
+    # Сколько дней держать в output_dir скриншоты, превью и осиротевшие рендеры
+    output_keep_days: int = 14
+
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir,
                   self.cookies_dir, self.hooks_dir, self.overlays_dir,
-                  self.backgrounds_dir):
+                  self.backgrounds_dir, self.ads_dir):
             Path(d).mkdir(parents=True, exist_ok=True)
 
 

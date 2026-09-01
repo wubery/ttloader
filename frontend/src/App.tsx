@@ -1060,6 +1060,12 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
   const [spreadMax, setSpreadMax] = useState(20);
   const [varyCaption, setVaryCaption] = useState(true);
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [splitOn, setSplitOn] = useState(false);
+  const [parts, setParts] = useState(3);
+  const [gapMin, setGapMin] = useState(30);
+  const [gapMax, setGapMax] = useState(120);
+  const [labelOn, setLabelOn] = useState(true);
+  const [labelTpl, setLabelTpl] = useState("Часть {n}/{total}");
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -1071,6 +1077,27 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
     if (picked.length === 0 || !videoId) { toast.add("warning", "Выберите аккаунты и видео"); return; }
     setBusy(true);
     try {
+      if (splitOn) {
+        const r = await api.createJobsParts({
+          account_ids: picked,
+          video_id: videoId,
+          parts,
+          caption,
+          caption_template: labelTpl,
+          label_on: labelOn,
+          banner_id: bannerId,
+          scheduled_at: when ? new Date(when).toISOString() : null,
+          uniq_profile_id: profileId,
+          part_gap_min_minutes: gapMin,
+          part_gap_max_minutes: gapMax,
+          spread_min_minutes: picked.length > 1 ? spreadMin : 0,
+          spread_max_minutes: picked.length > 1 ? spreadMax : 0,
+        });
+        toast.add("success", `Создано задач: ${r.jobs.length} (частей: ${parts})`);
+        if (r.skipped.length) toast.add("warning", "Пропущены: " + r.skipped.join("; "));
+        onCreated();
+        return;
+      }
       const r = await api.createJobsBulk({
         account_ids: picked,
         video_id: videoId,
@@ -1152,6 +1179,52 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
         <div className="col-12">
           <label className="form-label vp">Описание / подпись</label>
           <textarea className="form-control vp" rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Текст поста, #хэштеги" />
+        </div>
+        <div className="col-12">
+          <div className="form-check form-switch">
+            <input className="form-check-input" type="checkbox" id="splitOn"
+                   checked={splitOn} onChange={(e) => setSplitOn(e.target.checked)} />
+            <label className="form-check-label fs-sm" htmlFor="splitOn">
+              Разрезать видео на части и выкладывать серией
+            </label>
+          </div>
+          {splitOn && (
+            <div className="mt-2">
+              <div className="d-flex align-items-center gap-2 flex-wrap">
+                <span className="fs-sm text-muted">частей</span>
+                <input className="form-control vp form-control-sm" type="number" min={2} max={50} style={{ width: 84 }}
+                       value={parts} onChange={(e) => setParts(Math.max(2, Number(e.target.value) || 2))} />
+                <span className="fs-sm text-muted">пауза между частями: от</span>
+                <input className="form-control vp form-control-sm" type="number" min={0} max={1440} style={{ width: 84 }}
+                       value={gapMin} onChange={(e) => setGapMin(Math.max(0, Number(e.target.value) || 0))} />
+                <span className="fs-sm text-muted">до</span>
+                <input className="form-control vp form-control-sm" type="number" min={0} max={1440} style={{ width: 84 }}
+                       value={gapMax} onChange={(e) => setGapMax(Math.max(0, Number(e.target.value) || 0))} />
+                <span className="fs-sm text-muted">минут</span>
+              </div>
+              <div className="d-flex align-items-center gap-2 flex-wrap mt-2">
+                <div className="form-check form-switch mb-0">
+                  <input className="form-check-input" type="checkbox" id="labelOn"
+                         checked={labelOn} onChange={(e) => setLabelOn(e.target.checked)} />
+                  <label className="form-check-label fs-sm" htmlFor="labelOn">подпись на видео</label>
+                </div>
+                {labelOn && (
+                  <input className="form-control vp form-control-sm" style={{ maxWidth: 220 }}
+                         value={labelTpl} onChange={(e) => setLabelTpl(e.target.value)} />
+                )}
+              </div>
+              <div className="form-text fs-sm">
+                {(() => {
+                  const v = videos.find((x) => x.id === videoId);
+                  const per = v?.duration ? Math.round(v.duration / parts) : null;
+                  return per
+                    ? `≈ ${per} сек на часть. Каждая часть — отдельный пост со своей уникализацией; на аккаунте окажется вся серия.`
+                    : "Каждая часть — отдельный пост со своей уникализацией; на аккаунте окажется вся серия.";
+                })()}
+                {" "}Реклама внутрь части включается в профиле уникализации.
+              </div>
+            </div>
+          )}
         </div>
         {picked.length > 1 && (
           <div className="col-12">
@@ -1250,7 +1323,8 @@ function Jobs({ jobs, accounts, videos, onChange }: {
                 <span className={`status-dot ${sc.dot}`} />
                 <span className={`badge-vp ${sc.badge}`}>{sc.label}</span>
                 <span className="fs-sm">{accName(jb.account_id)} &larr; {vidName(jb.video_id)}</span>
-                {jb.group_id && <span className="badge-vp badge-vp-muted"><i className="bi bi-collection me-1" />группа · {groupInfo.get(jb.id) ?? ""}</span>}
+                {jb.part_index && <span className="badge-vp badge-vp-info"><i className="bi bi-scissors me-1" />часть {jb.part_index}/{jb.part_total}</span>}
+                {jb.group_id && !jb.part_index && <span className="badge-vp badge-vp-muted"><i className="bi bi-collection me-1" />группа · {groupInfo.get(jb.id) ?? ""}</span>}
                 {jb.scheduled_at && <span className="badge-vp badge-vp-muted"><i className="bi bi-clock me-1" />{new Date(jb.scheduled_at).toLocaleString()}</span>}
               </div>
               <div className="d-flex gap-1">

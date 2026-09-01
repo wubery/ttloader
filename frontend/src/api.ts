@@ -148,6 +148,16 @@ export interface OverlayAsset {
   created_at: string;
 }
 
+export interface AdClip {
+  id: number;
+  name: string;
+  filename: string;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  created_at: string;
+}
+
 export interface Background {
   id: number;
   name: string;
@@ -170,6 +180,8 @@ export interface Job {
   /** Общий id пачки: одно видео, разосланное на несколько аккаунтов */
   group_id: string | null;
   uniq_profile_id: number | null;
+  part_index: number | null;
+  part_total: number | null;
   account_id: number;
   video_id: number;
   banner_id: number | null;
@@ -331,6 +343,16 @@ export const api = {
   deleteOverlayAsset: (id: number) => fetch(`/api/overlays/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
   overlayFileUrl: (id: number) => `/api/overlays/${id}/file`,
 
+  ads: () => fetch("/api/ads").then((r) => j<AdClip[]>(r)),
+  uploadAd: (file: File, name: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", name);
+    return fetch("/api/ads", { method: "POST", body: fd }).then((r) => j<AdClip>(r));
+  },
+  deleteAd: (id: number) => fetch(`/api/ads/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  adFileUrl: (id: number) => `/api/ads/${id}/file`,
+
   backgrounds: () => fetch("/api/backgrounds").then((r) => j<Background[]>(r)),
   uploadBackground: (file: File, name: string) => {
     const fd = new FormData();
@@ -399,6 +421,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Job>(r)),
+
+  /** Длинное видео → серия частей на каждый аккаунт */
+  createJobsParts: (b: {
+    account_ids: number[];
+    video_id: number;
+    parts: number;
+    caption?: string;
+    caption_template?: string;
+    label_on?: boolean;
+    banner_id?: number | null;
+    scheduled_at?: string | null;
+    uniq_profile_id?: number | null;
+    part_gap_min_minutes?: number;
+    part_gap_max_minutes?: number;
+    spread_min_minutes?: number;
+    spread_max_minutes?: number;
+  }) =>
+    fetch("/api/jobs/parts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(b),
+    }).then((r) => j<{ jobs: Job[]; skipped: string[] }>(r)),
 
   /** Одно видео на несколько аккаунтов: у каждого свой рендер и свой хеш */
   createJobsBulk: (b: {

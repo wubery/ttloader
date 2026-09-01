@@ -203,6 +203,18 @@ class OverlayAssetOut(BaseModel):
     created_at: datetime
 
 
+class AdClipOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    filename: str
+    width: int | None
+    height: int | None
+    duration: float | None
+    created_at: datetime
+
+
 class BackgroundOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -296,12 +308,35 @@ class JobBulkCreate(BaseModel):
     vary_caption: bool = True
 
 
+class JobPartsCreate(BaseModel):
+    """Длинное видео → серия частей на каждый выбранный аккаунт."""
+
+    account_ids: list[int]
+    video_id: int
+    parts: int
+    caption: str = ""
+    caption_template: str = "Часть {n}/{total}"
+    label_on: bool = True                 # рисовать подпись части поверх видео
+    banner_id: int | None = None
+    overlays: list[dict] | None = None
+    scheduled_at: datetime | None = None
+    uniq_profile_id: int | None = None
+    # Пауза между частями одной серии, минуты
+    part_gap_min_minutes: int = 30
+    part_gap_max_minutes: int = 120
+    # Дополнительный разброс между аккаунтами
+    spread_min_minutes: int = 0
+    spread_max_minutes: int = 0
+
+
 class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     group_id: str | None
     uniq_profile_id: int | None
+    part_index: int | None
+    part_total: int | None
     account_id: int
     video_id: int
     banner_id: int | None

@@ -21,6 +21,10 @@ ENV DATA_DIR=/data \
     BANNERS_DIR=/data/banners \
     OUTPUT_DIR=/data/output \
     COOKIES_DIR=/data/cookies \
+    HOOKS_DIR=/data/hooks \
+    OVERLAYS_DIR=/data/overlays \
+    BACKGROUNDS_DIR=/data/backgrounds \
+    ADS_DIR=/data/ads \
     DATABASE_URL=sqlite:////data/video_poster.db \
     HEADLESS=true
 

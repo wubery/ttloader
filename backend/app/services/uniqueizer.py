@@ -382,6 +382,10 @@ def build_command(
             # свой вход на каждый сегмент: одну метку нельзя использовать дважды
             if background_is_video:
                 args += ["-stream_loop", "-1"]
+            else:
+                # без -loop картинка живёт один кадр, и overlay:shortest=1
+                # обрезает результат до нуля — на выходе файл без видеодорожки
+                args += ["-loop", "1"]
             args += ["-i", background]
             bg_label = f"[{idx}:v]"
             idx += 1

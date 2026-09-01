@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Hook, OverlayAsset, UniqProfile, Video } from "./api";
+import { api, Background, Hook, OverlayAsset, UniqProfile, Video } from "./api";
 
 /* ================================================================
    Вкладка «Уникализация»: профили + библиотеки хуков и оверлеев.
@@ -96,10 +96,11 @@ function Block({ title, hint, on, onToggle, children }: {
   );
 }
 
-export function Uniqueizer({ videos }: { videos: Video[] }) {
+export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: () => void }) {
   const [profiles, setProfiles] = useState<UniqProfile[]>([]);
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [assets, setAssets] = useState<OverlayAsset[]>([]);
+  const [backgrounds, setBackgrounds] = useState<Background[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [draft, setDraft] = useState<Params>({});
   const [name, setName] = useState("");
@@ -110,8 +111,11 @@ export function Uniqueizer({ videos }: { videos: Video[] }) {
   const current = useMemo(() => profiles.find((p) => p.id === sel) ?? null, [profiles, sel]);
 
   async function reload() {
-    const [p, h, a] = await Promise.all([api.uniqProfiles(), api.hooks(), api.overlayAssets()]);
-    setProfiles(p); setHooks(h); setAssets(a);
+    const [p, h, a, bg] = await Promise.all([
+      api.uniqProfiles(), api.hooks(), api.overlayAssets(), api.backgrounds(),
+    ]);
+    setProfiles(p); setHooks(h); setAssets(a); setBackgrounds(bg);
+    onChange?.();   // селекты профиля в других вкладках берут список из Dashboard
     if (sel === null && p.length) select(p[0]);
   }
   useEffect(() => { reload().catch((e) => setMsg(e.message)); }, []);
@@ -127,7 +131,7 @@ export function Uniqueizer({ videos }: { videos: Video[] }) {
   async function createProfile() {
     const defaults = await api.uniqDefaults();
     const p = await api.createUniqProfile({ name: `Профиль ${profiles.length + 1}`, params: defaults });
-    setProfiles((x) => [p, ...x]); select(p);
+    setProfiles((x) => [p, ...x]); select(p); onChange?.();
   }
 
   async function save() {
@@ -136,6 +140,7 @@ export function Uniqueizer({ videos }: { videos: Video[] }) {
     try {
       const p = await api.updateUniqProfile(current.id, { name, params: draft });
       setProfiles((x) => x.map((i) => (i.id === p.id ? p : i)));
+      onChange?.();
       setMsg("Профиль сохранён");
     } catch (e: any) { setMsg(e.message); } finally { setBusy(false); }
   }
@@ -301,8 +306,19 @@ export function Uniqueizer({ videos }: { videos: Video[] }) {
                       onChange={(e) => patch("canvas", { bg: e.target.value })}>
                 <option value="blur">размытая копия кадра</option>
                 <option value="color">сплошной цвет</option>
+                <option value="image">своя картинка или видео</option>
               </select>
             </div>
+            {draft.canvas?.bg === "image" && (
+              <div>
+                <label className="form-label vp mb-1">Файл фона</label>
+                <select className="form-select vp form-select-sm" value={draft.canvas?.bg_asset_id ?? ""}
+                        onChange={(e) => patch("canvas", { bg_asset_id: Number(e.target.value) || null })}>
+                  <option value="">случайный из библиотеки</option>
+                  {backgrounds.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+            )}
             {draft.canvas?.bg === "color" && (
               <div>
                 <label className="form-label vp mb-1">Цвет</label>
@@ -347,6 +363,12 @@ export function Uniqueizer({ videos }: { videos: Video[] }) {
                     accept="video/*" items={hooks}
                     upload={(f, n) => api.uploadHook(f, n)} remove={(id) => api.deleteHook(id)}
                     fileUrl={(id) => api.hookFileUrl(id)} isVideo onChange={reload} />
+
+      <MediaLibrary title="Фоны" icon="bi-easel"
+                    hint="Картинка или видео под рамку: видно по краям вокруг вписанного ролика."
+                    accept="image/*,video/*" items={backgrounds}
+                    upload={(f, n) => api.uploadBackground(f, n)} remove={(id) => api.deleteBackground(id)}
+                    fileUrl={(id) => api.backgroundFileUrl(id)} onChange={reload} />
 
       <MediaLibrary title="Оверлеи" icon="bi-layers"
                     hint="PNG с прозрачностью на весь кадр: текстуры, рамки, лёгкие засветки."

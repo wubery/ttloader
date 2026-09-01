@@ -37,7 +37,8 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "rotate": {"on": True, "deg": [1, 3], "flip180": False},
     "color": {"on": True, "presets": list(COLOR_PRESETS)},
     "noise": {"on": False, "strength": [1, 3]},
-    "canvas": {"on": True, "w": 1080, "h": 1920, "border_px": [10, 20], "bg": "blur", "color": "#000000"},
+    "canvas": {"on": True, "w": 1080, "h": 1920, "border_px": [10, 20], "bg": "blur",
+               "color": "#000000", "bg_asset_id": None, "bg_random": True},
     "overlay": {"on": False, "asset_id": None, "random": True, "opacity": [0.05, 0.20]},
     "hook": {"on": False, "asset_id": None, "random": True},
     "metadata": {"on": True},
@@ -225,7 +226,7 @@ def rotate_scale_factor(deg: float, w: int, h: int) -> float:
 
 
 def segment_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str,
-                  width: int, height: int) -> list[str]:
+                  width: int, height: int, bg_src: str | None = None) -> list[str]:
     """Цепочка фильтров одного сегмента: [src] … [out]."""
     steps: list[str] = []
 
@@ -259,7 +260,7 @@ def segment_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str,
         cur = f"[sg_{out.strip('[]')}]"
 
     if canvas.canvas_on:
-        chains.extend(_canvas_chain(plan, canvas, cur, out))
+        chains.extend(_canvas_chain(plan, canvas, cur, out, bg_src))
     else:
         # без холста всё равно нормализуем — concat не терпит разных размеров
         chains.append(
@@ -270,8 +271,13 @@ def segment_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str,
     return chains
 
 
-def _canvas_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str) -> list[str]:
-    """Вписывание в холст 1080×1920 с рамкой: цветной фон или размытая копия кадра."""
+def _canvas_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str,
+                  bg_src: str | None = None) -> list[str]:
+    """Вписывание в холст с рамкой.
+
+    Фон рамки — три варианта: свой файл (картинка или видео), размытая копия
+    кадра или сплошной цвет.
+    """
     w, h = canvas.canvas_w, canvas.canvas_h
     b = max(0, plan.border_px)
     inner_w, inner_h = max(2, w - 2 * b), max(2, h - 2 * b)
@@ -279,6 +285,15 @@ def _canvas_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str) -> li
 
     fit = (f"scale={inner_w}:{inner_h}:force_original_aspect_ratio=decrease,"
            f"scale=trunc(iw/2)*2:trunc(ih/2)*2")
+
+    if canvas.canvas_bg == "image" and bg_src:
+        # свой фон: растягиваем на весь холст с обрезкой по центру, ролик — поверх
+        return [
+            f"{bg_src}scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},setsar=1[bgi_{tag}]",
+            f"{src}{fit}[fgi_{tag}]",
+            f"[bgi_{tag}][fgi_{tag}]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1,fps={canvas.fps}{out}",
+        ]
 
     if canvas.canvas_bg == "blur":
         # копия кадра во весь холст, размытая, — фон; поверх вписанное видео
@@ -333,6 +348,8 @@ def build_command(
     output_path: str,
     hook: SegmentInput | None = None,
     overlay_png: str | None = None,
+    background: str | None = None,
+    background_is_video: bool = False,
     editor_overlays: list[dict] | None = None,
     encode_args: list[str],
     metadata_args: list[str],
@@ -360,8 +377,17 @@ def build_command(
         seg_idx = idx
         idx += 1
 
+        bg_label = None
+        if plan.canvas_bg == "image" and background:
+            # свой вход на каждый сегмент: одну метку нельзя использовать дважды
+            if background_is_video:
+                args += ["-stream_loop", "-1"]
+            args += ["-i", background]
+            bg_label = f"[{idx}:v]"
+            idx += 1
+
         vlbl = f"[sv{n}]"
-        chains += segment_chain(seg.plan, plan, f"[{seg_idx}:v]", vlbl, seg.width, seg.height)
+        chains += segment_chain(seg.plan, plan, f"[{seg_idx}:v]", vlbl, seg.width, seg.height, bg_label)
         v_labels.append(vlbl)
 
         albl = f"[sa{n}]"
@@ -431,6 +457,8 @@ def render(
     params: dict,
     hook_path: str | None = None,
     overlay_png: str | None = None,
+    background: str | None = None,
+    background_is_video: bool = False,
     editor_overlays: list[dict] | None = None,
     seed: int | None = None,
     log=lambda m: None,
@@ -470,6 +498,8 @@ def render(
         output_path=output_path,
         hook=hook_seg,
         overlay_png=overlay_png,
+        background=background,
+        background_is_video=background_is_video,
         editor_overlays=editor_overlays,
         encode_args=media._encode_args(),
         metadata_args=media._uniq_metadata_args(),

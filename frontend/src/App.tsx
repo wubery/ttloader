@@ -361,7 +361,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             {tab === "accounts" && <Accounts accounts={accounts} profiles={profiles} onChange={refreshAll} />}
             {tab === "videos" && <Videos videos={videos} onChange={refreshAll} />}
             {tab === "banners" && <Banners banners={banners} onChange={refreshAll} />}
-            {tab === "uniq" && <Uniqueizer videos={videos} />}
+            {tab === "uniq" && <Uniqueizer videos={videos} onChange={refreshAll} />}
             {tab === "proxy" && <ProxyManager accounts={accounts} onChange={refreshAll} />}
             {tab === "stats" && <Stats jobs={jobs} accounts={accounts} videos={videos} />}
             {tab === "settings" && <Settings />}
@@ -541,7 +541,7 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
                       title="Профиль уникализации" value={a.uniq_profile_id ?? ""}
                       onChange={(e) => api.updateAccount(a.id, { uniq_profile_id: Number(e.target.value) || null })
                         .then(onChange).catch((x) => toast.add("error", x.message))}>
-                <option value="">уникализация: по умолчанию</option>
+                <option value="">профиль: не задан</option>
                 {profiles.map((p) => <option key={p.id} value={p.id}>профиль: {p.name}</option>)}
               </select>
               <ProxyEditor a={a} onChange={onChange} />
@@ -1141,7 +1141,7 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
           <label className="form-label vp">Профиль уникализации</label>
           <select className="form-select vp" value={profileId ?? ""}
                   onChange={(e) => setProfileId(Number(e.target.value) || null)}>
-            <option value="">— как у аккаунта —</option>
+            <option value="">— как задано у аккаунта —</option>
             {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.is_default ? " (по умолчанию)" : ""}</option>)}
           </select>
         </div>

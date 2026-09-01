@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     cookies_dir: str = str(BASE_DIR / "data" / "cookies")
     hooks_dir: str = str(BASE_DIR / "data" / "hooks")
     overlays_dir: str = str(BASE_DIR / "data" / "overlays")
+    backgrounds_dir: str = str(BASE_DIR / "data" / "backgrounds")
 
     # Внешние бинарники
     ffmpeg_bin: str = "ffmpeg"
@@ -42,7 +43,8 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir,
-                  self.cookies_dir, self.hooks_dir, self.overlays_dir):
+                  self.cookies_dir, self.hooks_dir, self.overlays_dir,
+                  self.backgrounds_dir):
             Path(d).mkdir(parents=True, exist_ok=True)
 
 

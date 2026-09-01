@@ -157,6 +157,22 @@ class OverlayAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class Background(Base):
+    """Свой фон под рамку: картинка или видео, растягивается на весь холст.
+
+    Альтернатива размытой копии кадра и сплошному цвету — виден по краям вокруг
+    вписанного ролика.
+    """
+
+    __tablename__ = "backgrounds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    filename: Mapped[str] = mapped_column(String(500))   # относительно backgrounds_dir
+    is_video: Mapped[bool] = mapped_column(default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class UniqProfile(Base):
     """Профиль уникализации: набор диапазонов, из которых берутся значения.
 

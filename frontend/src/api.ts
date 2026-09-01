@@ -148,6 +148,14 @@ export interface OverlayAsset {
   created_at: string;
 }
 
+export interface Background {
+  id: number;
+  name: string;
+  filename: string;
+  is_video: boolean;
+  created_at: string;
+}
+
 /** Профиль уникализации: каждый параметр — диапазон [от, до]; равные границы = ручное значение */
 export interface UniqProfile {
   id: number;
@@ -322,6 +330,16 @@ export const api = {
   },
   deleteOverlayAsset: (id: number) => fetch(`/api/overlays/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
   overlayFileUrl: (id: number) => `/api/overlays/${id}/file`,
+
+  backgrounds: () => fetch("/api/backgrounds").then((r) => j<Background[]>(r)),
+  uploadBackground: (file: File, name: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", name);
+    return fetch("/api/backgrounds", { method: "POST", body: fd }).then((r) => j<Background>(r));
+  },
+  deleteBackground: (id: number) => fetch(`/api/backgrounds/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  backgroundFileUrl: (id: number) => `/api/backgrounds/${id}/file`,
 
   uniqProfiles: () => fetch("/api/uniq-profiles").then((r) => j<UniqProfile[]>(r)),
   uniqDefaults: () => fetch("/api/uniq-profiles/defaults").then((r) => j<Record<string, any>>(r)),

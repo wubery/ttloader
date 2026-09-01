@@ -80,9 +80,9 @@ def _resolve_profile(job: Job, account, db):
     return db.query(UniqProfile).filter(UniqProfile.is_default.is_(True)).first()
 
 
-def _pick_assets(params: dict, db) -> tuple[str | None, str | None]:
-    """Выбирает файлы хука и оверлея по настройкам профиля (конкретный или случайный)."""
-    from ..models import Hook, OverlayAsset
+def _pick_assets(params: dict, db) -> tuple[str | None, str | None, str | None, bool]:
+    """Выбирает файлы хука, оверлея и фона по настройкам профиля."""
+    from ..models import Background, Hook, OverlayAsset
 
     hook_path = None
     hook_cfg = params.get("hook") or {}
@@ -106,7 +106,20 @@ def _pick_assets(params: dict, db) -> tuple[str | None, str | None]:
             path = os.path.join(settings.overlays_dir, row.filename)
             overlay_png = path if os.path.exists(path) else None
 
-    return hook_path, overlay_png
+    background = None
+    bg_is_video = False
+    canvas_cfg = params.get("canvas") or {}
+    if canvas_cfg.get("bg") == "image":
+        row = db.get(Background, canvas_cfg["bg_asset_id"]) if canvas_cfg.get("bg_asset_id") else None
+        if row is None and canvas_cfg.get("bg_random", True):
+            rows = db.query(Background).all()
+            row = random.choice(rows) if rows else None
+        if row is not None:
+            path = os.path.join(settings.backgrounds_dir, row.filename)
+            if os.path.exists(path):
+                background, bg_is_video = path, bool(row.is_video)
+
+    return hook_path, overlay_png, background, bg_is_video
 
 
 def _live_log_render(job: Job, db):
@@ -221,13 +234,15 @@ def run_job(job_id: int) -> None:
             out_path = os.path.join(settings.output_dir, out_name)
             try:
                 params = json.loads(profile.params) if profile.params else {}
-                hook_path, overlay_png = _pick_assets(params, db)
+                hook_path, overlay_png, background, bg_is_video = _pick_assets(params, db)
                 uniqueizer.render(
                     video_path=video_path,
                     output_path=out_path,
                     params=params,
                     hook_path=hook_path,
                     overlay_png=overlay_png,
+                    background=background,
+                    background_is_video=bg_is_video,
                     editor_overlays=overlays or None,
                     log=_live_log_render(job, db),
                 )

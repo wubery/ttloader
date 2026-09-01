@@ -203,6 +203,16 @@ class OverlayAssetOut(BaseModel):
     created_at: datetime
 
 
+class BackgroundOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    filename: str
+    is_video: bool
+    created_at: datetime
+
+
 class UniqProfileCreate(BaseModel):
     name: str
     params: dict | None = None

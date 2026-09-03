@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Account
+from ..models import Account, AccountGroup
 from ..schemas import (
     AccountCreate,
     AccountOut,
@@ -72,6 +72,24 @@ def _ensure_proxy_unique(db: Session, proxy_url: str, exclude_id: int | None = N
         )
 
 
+def _apply_group(db: Session, acc: Account, payload) -> None:
+    """Переносит group_id/uniq_profile_id из запроса, если они реально присланы.
+
+    Здесь нельзя пользоваться обычным `if payload.X is not None`: для этих полей
+    null — это осмысленное «снять привязку», а не «не трогать». Различаем по
+    model_fields_set: Pydantic v2 хранит там только явно переданные ключи.
+    Раньше uniq_profile_id не присваивался вовсе, и селектор профиля в карточке
+    аккаунта молча ничего не сохранял.
+    """
+    fields = payload.model_fields_set
+    if "group_id" in fields:
+        if payload.group_id is not None and db.get(AccountGroup, payload.group_id) is None:
+            raise HTTPException(404, "Группа не найдена")
+        acc.group_id = payload.group_id
+    if "uniq_profile_id" in fields:
+        acc.uniq_profile_id = payload.uniq_profile_id
+
+
 @router.get("", response_model=list[AccountOut])
 def list_accounts(db: Session = Depends(get_db)):
     return db.query(Account).order_by(Account.id.desc()).all()
@@ -110,6 +128,7 @@ def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
     acc = Account(name=payload.name, platform=payload.platform, proxy_url=payload.proxy_url)
     if payload.uniqueize is not None:
         acc.uniqueize = payload.uniqueize
+    _apply_group(db, acc, payload)
     _apply_credentials(acc, payload)
     db.add(acc)
     db.commit()
@@ -141,6 +160,7 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
         acc.active = payload.active
     if payload.uniqueize is not None:
         acc.uniqueize = payload.uniqueize
+    _apply_group(db, acc, payload)
     _apply_credentials(acc, payload)
     db.commit()
     db.refresh(acc)

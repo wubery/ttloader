@@ -44,6 +44,23 @@ class BannerType(str, enum.Enum):
     video = "video"   # зацикленное видео (mp4/webm/mov)
 
 
+class AccountGroup(Base):
+    """Группа аккаунтов — когорта для проверки гипотез постинга.
+
+    Не путать с Job.group_id: там это идентификатор одной пачки задач (пост на
+    несколько аккаунтов или серия частей), а здесь — постоянная принадлежность
+    аккаунта. На рендер и постинг группа не влияет: она нужна, чтобы отобрать
+    аккаунты в форме поста и разложить статистику по когортам.
+    """
+
+    __tablename__ = "account_groups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    color: Mapped[str | None] = mapped_column(String(9), default=None)   # #RRGGBB для бейджа
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Account(Base):
     """Аккаунт соцсети. Авторизация — через сохранённые куки (storage_state Playwright).
     К аккаунту привязывается личный прокси, чтобы IP всегда был одинаковым."""
@@ -65,6 +82,8 @@ class Account(Base):
     uniqueize: Mapped[bool] = mapped_column(default=True, server_default="1")
     # Профиль уникализации, закреплённый за аккаунтом (можно переопределить в задаче)
     uniq_profile_id: Mapped[int | None] = mapped_column(ForeignKey("uniq_profiles.id"), default=None)
+    # Группа-когорта (см. AccountGroup). Это НЕ Job.group_id — там пачка задач.
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("account_groups.id"), default=None)
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

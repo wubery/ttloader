@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, createContext, useContext, useMemo } from "react";
 import {
-  api, Account, AutoLoginState, Banner, Job, LoginStage, MailConnect, MailConnectState,
+  api, Account, AccountGroup, AutoLoginState, Banner, Job, LoginStage, MailConnect, MailConnectState,
   MailMessage, Platform, SettingsData, SystemVersion, UniqProfile, Video,
 } from "./api";
 import { BannerEditor } from "./BannerEditor";
@@ -241,6 +241,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [videos, setVideos] = useState<Video[]>([]);
   const [banners, setBanners] = useState<Banner[]>([]);
   const [profiles, setProfiles] = useState<UniqProfile[]>([]);
+  const [groups, setGroups] = useState<AccountGroup[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [health, setHealth] = useState<any>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -256,10 +257,11 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   async function refreshAll() {
     try {
-      const [a, v, b, j, pr] = await Promise.all([
+      const [a, v, b, j, pr, gr] = await Promise.all([
         api.accounts(), api.videos(), api.banners(), api.jobs(), api.uniqProfiles(),
+        api.accountGroups(),
       ]);
-      setAccounts(a); setVideos(v); setBanners(b); setJobs(j); setProfiles(pr);
+      setAccounts(a); setVideos(v); setBanners(b); setJobs(j); setProfiles(pr); setGroups(gr);
     } catch (e: any) { toast.add("error", e.message); }
   }
 
@@ -355,15 +357,15 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         <div className="vp-content vp-tab-enter" key={tab}>
           <SearchCtx.Provider value={{ query: search, set: setSearch }}>
             {tab === "jobs" && <Jobs jobs={jobs} accounts={accounts} videos={videos} onChange={refreshAll} />}
-            {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} profiles={profiles} onCreated={() => { refreshAll(); setTab("jobs"); }} />}
-            {tab === "editor" && <BannerEditor videos={videos} banners={banners} accounts={accounts}
+            {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} profiles={profiles} groups={groups} onCreated={() => { refreshAll(); setTab("jobs"); }} />}
+            {tab === "editor" && <BannerEditor videos={videos} banners={banners} accounts={accounts} groups={groups}
               onSaved={refreshAll} onPosted={() => { refreshAll(); setTab("jobs"); }} />}
-            {tab === "accounts" && <Accounts accounts={accounts} profiles={profiles} onChange={refreshAll} />}
+            {tab === "accounts" && <Accounts accounts={accounts} profiles={profiles} groups={groups} onChange={refreshAll} />}
             {tab === "videos" && <Videos videos={videos} onChange={refreshAll} />}
             {tab === "banners" && <Banners banners={banners} onChange={refreshAll} />}
             {tab === "uniq" && <Uniqueizer videos={videos} onChange={refreshAll} />}
             {tab === "proxy" && <ProxyManager accounts={accounts} onChange={refreshAll} />}
-            {tab === "stats" && <Stats jobs={jobs} accounts={accounts} videos={videos} />}
+            {tab === "stats" && <Stats jobs={jobs} accounts={accounts} videos={videos} groups={groups} />}
             {tab === "settings" && <Settings />}
           </SearchCtx.Provider>
         </div>
@@ -373,9 +375,117 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 }
 
 /* ================================================================
+   Группы аккаунтов — когорты для проверки гипотез постинга
+   ================================================================ */
+// Палитра фиксированная, а не свободный color-picker: бейджи должны оставаться
+// читаемыми и в светлой, и в тёмной теме.
+const GROUP_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6"];
+const GROUP_FALLBACK = "#9b8cf5";   // как у badge-vp-info, если цвет не выбран
+
+/** Бейдж группы: фон — цвет с прозрачностью, текст — он же насыщенный. */
+function GroupBadge({ group, className = "" }: { group?: AccountGroup; className?: string }) {
+  if (!group) return null;
+  const c = group.color || GROUP_FALLBACK;
+  return (
+    <span className={`badge-vp ${className}`} style={{ background: `${c}26`, color: c }}
+          title={`Группа: ${group.name}`}>
+      <i className="bi bi-collection" /> {group.name}
+    </span>
+  );
+}
+
+/** Ряд свотчей палитры. */
+function ColorSwatches({ value, onPick }: { value: string | null; onPick: (c: string) => void }) {
+  return (
+    <div className="d-flex align-items-center gap-1">
+      {GROUP_COLORS.map((c) => (
+        <button key={c} type="button" title={c} onClick={() => onPick(c)}
+                style={{
+                  width: 20, height: 20, borderRadius: 6, background: c, cursor: "pointer",
+                  border: value === c ? "2px solid var(--vp-text)" : "1px solid var(--vp-border)",
+                }} />
+      ))}
+    </div>
+  );
+}
+
+/** Справочник групп: создание, переименование, цвет, удаление. */
+function GroupsCard({ groups, onChange }: { groups: AccountGroup[]; onChange: () => void }) {
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(GROUP_COLORS[0]);
+  const toast = useToast();
+  const { confirm } = useConfirm();
+
+  async function create() {
+    try {
+      await api.createAccountGroup({ name, color });
+      setName("");
+      onChange();
+      toast.add("success", "Группа создана");
+    } catch (e: any) { toast.add("error", e.message); }
+  }
+  async function patch(g: AccountGroup, body: Partial<{ name: string; color: string | null }>) {
+    try { await api.updateAccountGroup(g.id, body); onChange(); }
+    catch (e: any) { toast.add("error", e.message); onChange(); }   // откатываем поле к серверному
+  }
+  async function remove(g: AccountGroup) {
+    const ok = await confirm("Удалить группу?",
+      `«${g.name}» — аккаунты не удалятся, они просто потеряют группу.`);
+    if (!ok) return;
+    try { await api.deleteAccountGroup(g.id); onChange(); toast.add("info", "Группа удалена"); }
+    catch (e: any) { toast.add("error", e.message); }
+  }
+
+  return (
+    <div className="vp-card">
+      <div className="vp-card-header">
+        <h3><i className="bi bi-collection me-2 text-accent" />Группы аккаунтов</h3>
+      </div>
+      <div className="d-flex align-items-center gap-2 flex-wrap">
+        <input className="form-control vp form-control-sm" style={{ maxWidth: 240 }}
+               placeholder="Название группы" value={name}
+               onChange={(e) => setName(e.target.value)}
+               onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) create(); }} />
+        <ColorSwatches value={color} onPick={setColor} />
+        <button className="btn btn-vp btn-sm" disabled={!name.trim()} onClick={create}>
+          <i className="bi bi-plus-lg me-1" />Создать
+        </button>
+      </div>
+
+      {groups.length > 0 && (
+        <div className="d-flex flex-column gap-2 mt-3">
+          {groups.map((g) => (
+            <div className="d-flex align-items-center gap-2 flex-wrap" key={g.id}>
+              <input className="form-control vp form-control-sm" style={{ maxWidth: 240 }}
+                     defaultValue={g.name} key={`${g.id}-${g.name}`}
+                     onBlur={(e) => {
+                       const v = e.target.value.trim();
+                       if (v && v !== g.name) patch(g, { name: v });
+                     }} />
+              <ColorSwatches value={g.color} onPick={(c) => patch(g, { color: c })} />
+              <span className="badge-vp badge-vp-muted">{g.accounts_count} акк.</span>
+              <button className="btn btn-vp-danger btn-sm" onClick={() => remove(g)}>
+                <i className="bi bi-trash" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="fs-sm text-muted mt-2 mb-0">
+        Группа — это когорта для проверки гипотез: в форме поста её аккаунты выбираются одним
+        движением, а на вкладке «Статистика» видно результат по каждой группе. На рендер и
+        уникализацию группа не влияет.
+      </p>
+    </div>
+  );
+}
+
+/* ================================================================
    Accounts
    ================================================================ */
-function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profiles: UniqProfile[]; onChange: () => void }) {
+function Accounts({ accounts, profiles, groups, onChange }: {
+  accounts: Account[]; profiles: UniqProfile[]; groups: AccountGroup[]; onChange: () => void;
+}) {
   const [name, setName] = useState("");
   const [platform, setPlatform] = useState<Platform>("tiktok");
   const [proxy, setProxy] = useState("");
@@ -383,6 +493,7 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
   const [ttPass, setTtPass] = useState("");
   const [mailAddr, setMailAddr] = useState("");
   const [mailPass, setMailPass] = useState("");
+  const [newGroup, setNewGroup] = useState<number | null>(null);
   const [startLogin, setStartLogin] = useState(true);
   const [login, setLogin] = useState<{ id: number; name: string } | null>(null);
   const [mailFor, setMailFor] = useState<Account | null>(null);
@@ -392,17 +503,20 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
   const { confirm } = useConfirm();
   const { query } = useContext(SearchCtx);
 
+  const byId = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
   const filtered = useMemo(() => {
     if (!query) return accounts;
     const q = query.toLowerCase();
-    return accounts.filter((a) => a.name.toLowerCase().includes(q) || a.platform.includes(q) || (a.proxy_url || "").toLowerCase().includes(q));
-  }, [accounts, query]);
+    return accounts.filter((a) => a.name.toLowerCase().includes(q) || a.platform.includes(q)
+      || (a.proxy_url || "").toLowerCase().includes(q)
+      || (a.group_id ? byId.get(a.group_id)?.name.toLowerCase().includes(q) ?? false : false));
+  }, [accounts, query, byId]);
   const visible = filtered.slice(0, showCount);
 
   async function create() {
     try {
       const acc = await api.createAccount({
-        name, platform, proxy_url: proxy || null,
+        name, platform, proxy_url: proxy || null, group_id: newGroup,
         tt_login: ttLogin || null, tt_password: ttPass || null,
         mail_address: mailAddr || null, mail_password: mailPass || null,
         start_login: startLogin,
@@ -446,9 +560,17 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
               <option value="youtube">YouTube Shorts</option>
             </select>
           </div>
-          <div className="col-md-5">
+          <div className="col-md-3">
             <label className="form-label vp">Прокси</label>
             <input className="form-control vp" placeholder="http://user:pass@host:port" value={proxy} onChange={(e) => setProxy(e.target.value)} />
+          </div>
+          <div className="col-md-2">
+            <label className="form-label vp">Группа</label>
+            <select className="form-select vp" value={newGroup ?? ""}
+                    onChange={(e) => setNewGroup(Number(e.target.value) || null)}>
+              <option value="">— без группы —</option>
+              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
           </div>
           <div className="col-md-2">
             <button className="btn btn-vp w-100" onClick={create} disabled={!name}>Создать</button>
@@ -487,6 +609,8 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
         </p>
       </div>
 
+      <GroupsCard groups={groups} onChange={onChange} />
+
       <div className="d-flex flex-column gap-2">
         {visible.map((a) => (
           <div className="vp-card" key={a.id}>
@@ -495,6 +619,7 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
                 <i className={`bi ${a.platform === "tiktok" ? "bi-tiktok" : "bi-youtube"} fs-5`} />
                 <b>{a.name}</b>
                 <span className="badge-vp badge-vp-info">{a.platform}</span>
+                {a.group_id != null && <GroupBadge group={byId.get(a.group_id)} />}
                 {a.has_cookies ? <span className="badge-vp badge-vp-success"><i className="bi bi-check-circle" /> куки</span> : <span className="badge-vp badge-vp-danger"><i className="bi bi-x-circle" /> нет кук</span>}
                 {a.proxy_url ? <span className="badge-vp badge-vp-muted"><i className="bi bi-shield" /> прокси</span> : <span className="badge-vp badge-vp-danger">без прокси</span>}
                 {a.proxy_url && a.proxy_ok === true && <span className="badge-vp badge-vp-success">IP {a.proxy_ip}</span>}
@@ -543,6 +668,13 @@ function Accounts({ accounts, profiles, onChange }: { accounts: Account[]; profi
                         .then(onChange).catch((x) => toast.add("error", x.message))}>
                 <option value="">профиль: не задан</option>
                 {profiles.map((p) => <option key={p.id} value={p.id}>профиль: {p.name}</option>)}
+              </select>
+              <select className="form-select vp form-select-sm" style={{ maxWidth: 190 }}
+                      title="Группа аккаунта" value={a.group_id ?? ""}
+                      onChange={(e) => api.updateAccount(a.id, { group_id: Number(e.target.value) || null })
+                        .then(onChange).catch((x) => toast.add("error", x.message))}>
+                <option value="">группа: не задана</option>
+                {groups.map((g) => <option key={g.id} value={g.id}>группа: {g.name}</option>)}
               </select>
               <ProxyEditor a={a} onChange={onChange} />
             </div>
@@ -1048,10 +1180,13 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
 /* ================================================================
    Post Form
    ================================================================ */
-function PostForm({ accounts, videos, banners, profiles, onCreated }: {
-  accounts: Account[]; videos: Video[]; banners: Banner[]; profiles: UniqProfile[]; onCreated: () => void;
+function PostForm({ accounts, videos, banners, profiles, groups, onCreated }: {
+  accounts: Account[]; videos: Video[]; banners: Banner[]; profiles: UniqProfile[];
+  groups: AccountGroup[]; onCreated: () => void;
 }) {
   const [picked, setPicked] = useState<number[]>([]);
+  // Фильтр по группе: null — все аккаунты, -1 — только без группы, иначе id группы.
+  const [groupFilter, setGroupFilter] = useState<number | null>(null);
   const [videoId, setVideoId] = useState<number | null>(null);
   const [bannerId, setBannerId] = useState<number | null>(null);
   const [caption, setCaption] = useState("");
@@ -1069,9 +1204,23 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
-  const ready = accounts.filter((a) => a.has_cookies && a.active);
+  const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
+  const inFilter = (a: Account) =>
+    groupFilter === null ? true : groupFilter === -1 ? a.group_id == null : a.group_id === groupFilter;
+  const shown = accounts.filter(inFilter);
+  const ready = shown.filter((a) => a.has_cookies && a.active);
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  /** Выбор группы — это и есть «постить на группу»: фильтруем список и сразу
+   *  отмечаем её пригодные аккаунты. «Все аккаунты» только снимает фильтр,
+   *  чтобы не терять уже собранный вручную набор. */
+  function pickGroup(gid: number | null) {
+    setGroupFilter(gid);
+    if (gid === null) return;
+    const fit = accounts.filter((a) => (gid === -1 ? a.group_id == null : a.group_id === gid));
+    setPicked(fit.filter((a) => a.has_cookies && a.active).map((a) => a.id));
+  }
 
   async function submit() {
     if (picked.length === 0 || !videoId) { toast.add("warning", "Выберите аккаунты и видео"); return; }
@@ -1127,14 +1276,26 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
             <label className="form-label vp mb-0">
               Аккаунты{picked.length > 0 && <span className="badge-vp badge-vp-info ms-2">выбрано {picked.length}</span>}
             </label>
-            <div className="d-flex gap-2">
+            <div className="d-flex gap-2 align-items-center flex-wrap">
+              {groups.length > 0 && (
+                <select className="form-select vp form-select-sm" style={{ maxWidth: 220 }}
+                        title="Постить на группу" value={groupFilter ?? ""}
+                        onChange={(e) => pickGroup(e.target.value === "" ? null : Number(e.target.value))}>
+                  <option value="">— все аккаунты —</option>
+                  {groups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.accounts_count})</option>)}
+                  <option value="-1">— без группы —</option>
+                </select>
+              )}
               <button className="btn btn-vp-outline btn-sm" onClick={() => setPicked(ready.map((a) => a.id))}>Выбрать все</button>
               <button className="btn btn-vp-outline btn-sm" disabled={picked.length === 0} onClick={() => setPicked([])}>Снять</button>
             </div>
           </div>
           <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid var(--vp-border)", borderRadius: 8, padding: 8 }}>
             {accounts.length === 0 && <div className="fs-sm text-muted">Аккаунтов нет — добавьте их на вкладке «Аккаунты».</div>}
-            {accounts.map((a) => {
+            {accounts.length > 0 && shown.length === 0 && (
+              <div className="fs-sm text-muted">В этой группе нет аккаунтов.</div>
+            )}
+            {shown.map((a) => {
               const usable = a.has_cookies && a.active;
               return (
                 <label key={a.id} className="d-flex align-items-center gap-2 py-1" style={{ cursor: usable ? "pointer" : "not-allowed", opacity: usable ? 1 : 0.55 }}>
@@ -1142,13 +1303,19 @@ function PostForm({ accounts, videos, banners, profiles, onCreated }: {
                          checked={picked.includes(a.id)} onChange={() => toggle(a.id)} />
                   <span className="fs-sm">{a.name}</span>
                   <span className="badge-vp badge-vp-info">{a.platform}</span>
+                  {a.group_id != null && <GroupBadge group={groupById.get(a.group_id)} />}
                   {!a.has_cookies && <span className="badge-vp badge-vp-danger">нет кук</span>}
                   {a.has_cookies && !a.active && <span className="badge-vp badge-vp-muted">выключен</span>}
                 </label>
               );
             })}
           </div>
-          <div className="form-text fs-sm">Каждый аккаунт получит свой рендер — отдельный файл с отдельным хешем.</div>
+          <div className="form-text fs-sm">
+            Каждый аккаунт получит свой рендер — отдельный файл с отдельным хешем.
+            {groups.length > 0
+              ? " Выбор группы отмечает все её пригодные аккаунты — лишние можно снять галочкой."
+              : " Группы задаются на вкладке «Аккаунты» — ими удобно проверять гипотезы постинга."}
+          </div>
         </div>
         <div className="col-md-6">
           <label className="form-label vp">Видео</label>
@@ -1631,7 +1798,9 @@ function ProxyManager({ accounts, onChange }: { accounts: Account[]; onChange: (
 /* ================================================================
    Stats Dashboard
    ================================================================ */
-function Stats({ jobs, accounts, videos }: { jobs: Job[]; accounts: Account[]; videos: Video[] }) {
+function Stats({ jobs, accounts, videos, groups }: {
+  jobs: Job[]; accounts: Account[]; videos: Video[]; groups: AccountGroup[];
+}) {
   const total = jobs.length;
   const done = jobs.filter((j) => j.status === "done").length;
   const failed = jobs.filter((j) => j.status === "failed").length;
@@ -1659,6 +1828,27 @@ function Stats({ jobs, accounts, videos }: { jobs: Job[]; accounts: Account[]; v
     };
   });
   const maxDay = Math.max(1, ...last7.map((d) => d.total));
+
+  // Разбивка по группам-когортам. Считается на клиенте из уже загруженных данных:
+  // задача знает аккаунт, аккаунт — свою текущую группу.
+  const byGroup = useMemo(() => {
+    const groupOf = new Map(accounts.map((a) => [a.id, a.group_id ?? null]));
+    const rows = [
+      ...groups.map((g) => ({ id: g.id as number | null, name: g.name, color: g.color })),
+      { id: null as number | null, name: "Без группы", color: null as string | null },
+    ].map((row) => {
+      const accs = accounts.filter((a) => (a.group_id ?? null) === row.id);
+      const gj = jobs.filter((j) => (groupOf.get(j.account_id) ?? null) === row.id);
+      const gd = gj.filter((j) => j.status === "done").length;
+      const gf = gj.filter((j) => j.status === "failed").length;
+      return {
+        ...row, accounts: accs.length, jobs: gj.length, done: gd, failed: gf,
+        rate: gj.length > 0 ? Math.round((gd / gj.length) * 100) : 0,
+      };
+    });
+    // строку «Без группы» показываем только если там что-то есть
+    return rows.filter((r) => r.id !== null || r.accounts > 0 || r.jobs > 0);
+  }, [jobs, accounts, groups]);
 
   // Accounts by platform
   const tiktok = accounts.filter((a) => a.platform === "tiktok").length;
@@ -1747,6 +1937,56 @@ function Stats({ jobs, accounts, videos }: { jobs: Job[]; accounts: Account[]; v
           </div>
         </div>
       </div>
+
+      {/* Разбивка по группам — ради неё группы и заводятся */}
+      {groups.length > 0 && (
+        <div className="vp-card mb-4">
+          <h6 className="mb-3"><i className="bi bi-collection me-2" />По группам</h6>
+          <div className="table-responsive">
+            <table className="table table-sm align-middle mb-0">
+              <thead>
+                <tr className="fs-sm text-muted">
+                  <th>Группа</th><th className="text-end">Аккаунтов</th><th className="text-end">Задач</th>
+                  <th className="text-end">Выполнено</th><th className="text-end">Ошибок</th>
+                  <th style={{ minWidth: 140 }}>Успех</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byGroup.map((r) => {
+                  const c = r.color || GROUP_FALLBACK;
+                  return (
+                    <tr key={r.id ?? "none"}>
+                      <td>
+                        {r.id === null
+                          ? <span className="badge-vp badge-vp-muted">{r.name}</span>
+                          : <span className="badge-vp" style={{ background: `${c}26`, color: c }}>
+                              <i className="bi bi-collection" /> {r.name}
+                            </span>}
+                      </td>
+                      <td className="text-end">{r.accounts}</td>
+                      <td className="text-end">{r.jobs}</td>
+                      <td className="text-end" style={{ color: "var(--vp-success)" }}>{r.done}</td>
+                      <td className="text-end" style={{ color: "var(--vp-danger)" }}>{r.failed}</td>
+                      <td>
+                        <div className="d-flex align-items-center gap-2">
+                          <div style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--vp-border)" }}>
+                            <div style={{ width: `${r.rate}%`, height: "100%", borderRadius: 3, background: "var(--vp-success)" }} />
+                          </div>
+                          <span className="fs-sm text-muted" style={{ minWidth: 34 }}>{r.jobs > 0 ? `${r.rate}%` : "—"}</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="form-text fs-sm mt-2">
+            Считается по текущей принадлежности аккаунтов: если перенести аккаунт в другую
+            группу, его прошлые посты уедут вместе с ним.
+          </div>
+        </div>
+      )}
 
       {/* Activity chart */}
       <div className="vp-card">

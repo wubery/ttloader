@@ -13,6 +13,7 @@ class AccountCreate(BaseModel):
     platform: Platform
     proxy_url: str | None = None
     uniqueize: bool | None = None
+    group_id: int | None = None
     # Данные для автоматического входа (все необязательные)
     tt_login: str | None = None
     tt_password: str | None = None
@@ -26,8 +27,11 @@ class AccountCreate(BaseModel):
 
 
 class AccountUpdate(BaseModel):
+    # У uniq_profile_id и group_id null — это осмысленное «снять», а не «не трогать»:
+    # роутер различает их по payload.model_fields_set, а не по значению.
     name: str | None = None
     uniq_profile_id: int | None = None
+    group_id: int | None = None
     proxy_url: str | None = None
     active: bool | None = None
     uniqueize: bool | None = None
@@ -54,6 +58,7 @@ class AccountOut(BaseModel):
     proxy_checked_at: datetime | None
     uniqueize: bool
     uniq_profile_id: int | None
+    group_id: int | None
     active: bool
     has_cookies: bool
     created_at: datetime
@@ -222,6 +227,25 @@ class BackgroundOut(BaseModel):
     name: str
     filename: str
     is_video: bool
+    created_at: datetime
+
+
+# ---------- Группы аккаунтов ----------
+class AccountGroupCreate(BaseModel):
+    name: str
+    color: str | None = None
+
+
+class AccountGroupUpdate(BaseModel):
+    name: str | None = None
+    color: str | None = None
+
+
+class AccountGroupOut(BaseModel):
+    id: int
+    name: str
+    color: str | None
+    accounts_count: int          # для подписи «N аккаунтов» в панели
     created_at: datetime
 
 

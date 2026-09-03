@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Account, Banner, Motion, Overlay, Video , UniqProfile } from "./api";
+import { api, Account, AccountGroup, Banner, Motion, Overlay, Video , UniqProfile } from "./api";
 
 /**
  * Редактор слоёв: несколько баннеров + текстовые надписи поверх видео.
@@ -11,6 +11,7 @@ interface Props {
   videos: Video[];
   banners: Banner[];
   accounts?: Account[];
+  groups?: AccountGroup[];
   onSaved?: (b: Banner) => void;
   onPosted?: () => void;
 }
@@ -42,7 +43,7 @@ type Layer =
       end?: number;
     };
 
-export function BannerEditor({ videos, banners, accounts = [], onSaved, onPosted }: Props) {
+export function BannerEditor({ videos, banners, accounts = [], groups = [], onSaved, onPosted }: Props) {
   const [videoId, setVideoId] = useState<number | null>(videos[0]?.id ?? null);
   const [layers, setLayers] = useState<Layer[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
@@ -395,6 +396,7 @@ export function BannerEditor({ videos, banners, accounts = [], onSaved, onPosted
       {showPublish && video && (
         <PublishModal
           accounts={accounts}
+          groups={groups}
           videoId={video.id}
           overlays={toOverlays()}
           onClose={() => setShowPublish(false)}
@@ -405,15 +407,20 @@ export function BannerEditor({ videos, banners, accounts = [], onSaved, onPosted
   );
 }
 
-function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
+function PublishModal({ accounts, groups, videoId, overlays, onClose, onDone }: {
   accounts: Account[];
+  groups: AccountGroup[];
   videoId: number;
   overlays: Overlay[];
   onClose: () => void;
   onDone: () => void;
 }) {
-  const ready = accounts.filter((a) => a.has_cookies && a.active);
-  const [picked, setPicked] = useState<number[]>(ready[0] ? [ready[0].id] : []);
+  const allReady = accounts.filter((a) => a.has_cookies && a.active);
+  // Фильтр по группе: null — все, -1 — без группы, иначе id (как в форме «Новый пост»)
+  const [groupFilter, setGroupFilter] = useState<number | null>(null);
+  const ready = allReady.filter((a) =>
+    groupFilter === null ? true : groupFilter === -1 ? a.group_id == null : a.group_id === groupFilter);
+  const [picked, setPicked] = useState<number[]>(allReady[0] ? [allReady[0].id] : []);
   const [caption, setCaption] = useState("");
   const [when, setWhen] = useState("");
   const [spreadMin, setSpreadMin] = useState(5);
@@ -427,6 +434,13 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
 
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  /** Выбор группы фильтрует список и сразу отмечает её аккаунты. */
+  function pickGroup(gid: number | null) {
+    setGroupFilter(gid);
+    if (gid === null) return;
+    setPicked(allReady.filter((a) => (gid === -1 ? a.group_id == null : a.group_id === gid)).map((a) => a.id));
+  }
 
   async function submit() {
     if (picked.length === 0) return;
@@ -466,7 +480,16 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
                   <label className="form-label vp mb-0">
                     Аккаунты{picked.length > 0 && <span className="badge-vp badge-vp-info ms-2">выбрано {picked.length}</span>}
                   </label>
-                  <div className="d-flex gap-2">
+                  <div className="d-flex gap-2 align-items-center">
+                    {groups.length > 0 && (
+                      <select className="form-select vp form-select-sm" style={{ maxWidth: 170 }}
+                              title="Постить на группу" value={groupFilter ?? ""}
+                              onChange={(e) => pickGroup(e.target.value === "" ? null : Number(e.target.value))}>
+                        <option value="">все группы</option>
+                        {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        <option value="-1">без группы</option>
+                      </select>
+                    )}
                     <button className="btn btn-vp-outline btn-sm" onClick={() => setPicked(ready.map((a) => a.id))}>Все</button>
                     <button className="btn btn-vp-outline btn-sm" disabled={picked.length === 0} onClick={() => setPicked([])}>Снять</button>
                   </div>
@@ -481,7 +504,9 @@ function PublishModal({ accounts, videoId, overlays, onClose, onDone }: {
                     </label>
                   ))}
                 </div>
-                {ready.length === 0 && <div className="form-text text-danger fs-sm">Нет аккаунтов с куками — импортируйте их на вкладке «Аккаунты».</div>}
+                {allReady.length === 0
+                  ? <div className="form-text text-danger fs-sm">Нет аккаунтов с куками — импортируйте их на вкладке «Аккаунты».</div>
+                  : ready.length === 0 && <div className="form-text fs-sm text-muted">В этой группе нет готовых аккаунтов.</div>}
               </div>
               <div>
                 <label className="form-label vp">Профиль уникализации</label>

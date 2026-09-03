@@ -15,6 +15,8 @@ export interface Account {
   uniqueize: boolean;
   /** Профиль уникализации, закреплённый за аккаунтом */
   uniq_profile_id: number | null;
+  /** Группа-когорта аккаунта (см. AccountGroup). Не путать с Job.group_id — там пачка задач. */
+  group_id: number | null;
   active: boolean;
   has_cookies: boolean;
   created_at: string;
@@ -28,6 +30,15 @@ export interface Account {
   auto_login: boolean;
   last_login_at: string | null;
   login_error: string | null;
+}
+
+/** Группа аккаунтов: когорта для проверки гипотез постинга. */
+export interface AccountGroup {
+  id: number;
+  name: string;
+  color: string | null;
+  accounts_count: number;
+  created_at: string;
 }
 
 /** Поля профиля, которые можно задать при создании и правке. */
@@ -271,13 +282,13 @@ export const api = {
 
   // accounts
   accounts: () => fetch("/api/accounts").then((r) => j<Account[]>(r)),
-  createAccount: (b: { name: string; platform: Platform; proxy_url?: string | null; uniqueize?: boolean } & Partial<AccountCredentials> & { start_login?: boolean }) =>
+  createAccount: (b: { name: string; platform: Platform; proxy_url?: string | null; uniqueize?: boolean; group_id?: number | null } & Partial<AccountCredentials> & { start_login?: boolean }) =>
     fetch("/api/accounts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Account>(r)),
-  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean; uniq_profile_id: number | null } & AccountCredentials>) =>
+  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean; uniq_profile_id: number | null; group_id: number | null } & AccountCredentials>) =>
     fetch(`/api/accounts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -362,6 +373,19 @@ export const api = {
   },
   deleteBackground: (id: number) => fetch(`/api/backgrounds/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
   backgroundFileUrl: (id: number) => `/api/backgrounds/${id}/file`,
+
+  // группы аккаунтов
+  accountGroups: () => fetch("/api/account-groups").then((r) => j<AccountGroup[]>(r)),
+  createAccountGroup: (b: { name: string; color?: string | null }) =>
+    fetch("/api/account-groups", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<AccountGroup>(r)),
+  updateAccountGroup: (id: number, b: Partial<{ name: string; color: string | null }>) =>
+    fetch(`/api/account-groups/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<AccountGroup>(r)),
+  deleteAccountGroup: (id: number) =>
+    fetch(`/api/account-groups/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
 
   uniqProfiles: () => fetch("/api/uniq-profiles").then((r) => j<UniqProfile[]>(r)),
   uniqDefaults: () => fetch("/api/uniq-profiles/defaults").then((r) => j<Record<string, any>>(r)),

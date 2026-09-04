@@ -15,16 +15,16 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     timezone: str = "Europe/Moscow"
 
-    # Каталоги хранения (создаются автоматически при старте)
+    # Каталоги хранения (создаются автоматически при старте).
+    # Все считаются ОТ data_dir: иначе достаточно поменять DATA_DIR — и часть файлов
+    # уедет в новое место, а часть останется в старом. Так уже терялись хуки и фоны
+    # (уходили в /app/data мимо тома и пропадали при пересборке образа). Явные
+    # VIDEOS_DIR/HOOKS_DIR и т.п. по-прежнему главнее вычисленного значения.
     data_dir: str = str(BASE_DIR / "data")
-    videos_dir: str = str(BASE_DIR / "data" / "videos")
-    banners_dir: str = str(BASE_DIR / "data" / "banners")
-    output_dir: str = str(BASE_DIR / "data" / "output")
-    cookies_dir: str = str(BASE_DIR / "data" / "cookies")
-    # Библиотеки, добавленные позже. Считаются ОТ data_dir, а не от BASE_DIR: в Docker
-    # переменной окружения на них нет (в отличие от VIDEOS_DIR и прочих), и с прежним
-    # значением файлы уходили в /app/data — внутрь контейнера, мимо тома, а значит
-    # пропадали при каждой пересборке образа. Явный HOOKS_DIR и т.п. по-прежнему главнее.
+    videos_dir: str | None = None
+    banners_dir: str | None = None
+    output_dir: str | None = None
+    cookies_dir: str | None = None
     hooks_dir: str | None = None
     overlays_dir: str | None = None
     backgrounds_dir: str | None = None
@@ -33,7 +33,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _derive_dirs(self) -> "Settings":
         base = Path(self.data_dir)
-        for name, folder in (("hooks_dir", "hooks"), ("overlays_dir", "overlays"),
+        for name, folder in (("videos_dir", "videos"), ("banners_dir", "banners"),
+                             ("output_dir", "output"), ("cookies_dir", "cookies"),
+                             ("hooks_dir", "hooks"), ("overlays_dir", "overlays"),
                              ("backgrounds_dir", "backgrounds"), ("ads_dir", "ads")):
             if not getattr(self, name):
                 object.__setattr__(self, name, str(base / folder))
@@ -58,6 +60,21 @@ class Settings(BaseSettings):
 
     # Сколько дней держать в output_dir скриншоты, превью и осиротевшие рендеры
     output_keep_days: int = 14
+
+    # --- Качество кодирования -------------------------------------------------
+    # CRF берётся случайным из диапазона: это ещё и часть уникализации (другой
+    # битрейт → другой хеш). Чем меньше число, тем лучше картинка и больше файл.
+    # 18–20 — визуально «без потерь» для соцсетей; было 19–23, и на 23 картинка
+    # заметно сыпалась. preset влияет на скорость: veryfast ≈ втрое быстрее medium.
+    video_crf_min: int = 18
+    video_crf_max: int = 20
+    video_preset: str = "veryfast"
+    audio_bitrate: str = "192k"
+
+    # Принудительный шум в старом пути уникализации (без профиля). Выключен:
+    # шум сильнее всего портил картинку, а хеш и так меняют микрокроп, eq и
+    # случайные метаданные. В профилях шум остаётся отдельной настройкой.
+    uniq_force_noise: bool = False
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.videos_dir, self.banners_dir, self.output_dir,

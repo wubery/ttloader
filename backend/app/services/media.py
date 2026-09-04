@@ -138,12 +138,20 @@ def build_overlay_filter(
 
 def _uniq_vf(width: int, height: int) -> str:
     """Фильтр уникализации: микрокроп+ресайз (незаметно, меняет каждый пиксель) +
-    крошечные яркость/насыщенность + лёгкий шум. Меняет фингерпринт/хеш видео."""
+    крошечные яркость/насыщенность.
+
+    Шума здесь больше нет: он менял хеш, но сильнее всего и портил картинку —
+    кодек тратил битрейт на зерно, и ролик выглядел «зашакаленным». Хеш меняют
+    и микрокроп с ресайзом (каждый пиксель пересчитывается), eq и случайные
+    метаданные. Вернуть можно через UNIQ_FORCE_NOISE=1.
+    """
     b = random.uniform(-0.02, 0.02)
     s = random.uniform(0.97, 1.03)
-    n = random.randint(1, 3)
-    return (f"crop=iw-2:ih-2:1:1,scale={width}:{height},"
-            f"eq=brightness={b:.4f}:saturation={s:.4f},noise=alls={n}:allf=t")
+    vf = (f"crop=iw-2:ih-2:1:1,scale={width}:{height},"
+          f"eq=brightness={b:.4f}:saturation={s:.4f}")
+    if settings.uniq_force_noise:
+        vf += f",noise=alls={random.randint(1, 3)}:allf=t"
+    return vf
 
 
 def _uniq_metadata_args() -> list[str]:
@@ -155,10 +163,13 @@ def _uniq_metadata_args() -> list[str]:
 
 
 def _encode_args() -> list[str]:
+    """Параметры кодирования; крутятся из .env, см. Settings.video_crf_min и соседей."""
+    lo, hi = sorted((settings.video_crf_min, settings.video_crf_max))
     return [
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(random.randint(19, 23)),
+        "-c:v", "libx264", "-preset", settings.video_preset,
+        "-crf", str(random.randint(lo, hi)),
         "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k",
+        "-c:a", "aac", "-b:a", settings.audio_bitrate,
         "-movflags", "+faststart",
     ]
 

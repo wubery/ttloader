@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, useCallback, createContext, useContext, useMemo } from "react";
 import {
-  api, Account, AccountGroup, AutoLoginState, Banner, Job, LoginStage, MailConnect, MailConnectState,
+  api, Account, AccountGroup, AssetFolder, AutoLoginState, Banner, Job, LoginStage, MailConnect,
+  MailConnectState,
   MailMessage, Platform, SettingsData, SystemVersion, UniqProfile, Video,
 } from "./api";
 import { BannerEditor } from "./BannerEditor";
+import { FolderPicker, FolderTabs, FoldersCard, visibleToGroup } from "./Folders";
 import { Uniqueizer } from "./Uniqueizer";
 
 /* ================================================================
@@ -242,6 +244,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [banners, setBanners] = useState<Banner[]>([]);
   const [profiles, setProfiles] = useState<UniqProfile[]>([]);
   const [groups, setGroups] = useState<AccountGroup[]>([]);
+  const [videoFolders, setVideoFolders] = useState<AssetFolder[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [health, setHealth] = useState<any>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -257,11 +260,12 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   async function refreshAll() {
     try {
-      const [a, v, b, j, pr, gr] = await Promise.all([
+      const [a, v, b, j, pr, gr, vf] = await Promise.all([
         api.accounts(), api.videos(), api.banners(), api.jobs(), api.uniqProfiles(),
-        api.accountGroups(),
+        api.accountGroups(), api.assetFolders("video"),
       ]);
       setAccounts(a); setVideos(v); setBanners(b); setJobs(j); setProfiles(pr); setGroups(gr);
+      setVideoFolders(vf);
     } catch (e: any) { toast.add("error", e.message); }
   }
 
@@ -357,11 +361,11 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         <div className="vp-content vp-tab-enter" key={tab}>
           <SearchCtx.Provider value={{ query: search, set: setSearch }}>
             {tab === "jobs" && <Jobs jobs={jobs} accounts={accounts} videos={videos} onChange={refreshAll} />}
-            {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} profiles={profiles} groups={groups} onCreated={() => { refreshAll(); setTab("jobs"); }} />}
+            {tab === "post" && <PostForm accounts={accounts} videos={videos} banners={banners} profiles={profiles} groups={groups} videoFolders={videoFolders} onCreated={() => { refreshAll(); setTab("jobs"); }} />}
             {tab === "editor" && <BannerEditor videos={videos} banners={banners} accounts={accounts} groups={groups}
               onSaved={refreshAll} onPosted={() => { refreshAll(); setTab("jobs"); }} />}
             {tab === "accounts" && <Accounts accounts={accounts} profiles={profiles} groups={groups} onChange={refreshAll} />}
-            {tab === "videos" && <Videos videos={videos} onChange={refreshAll} />}
+            {tab === "videos" && <Videos videos={videos} folders={videoFolders} groups={groups} onChange={refreshAll} />}
             {tab === "banners" && <Banners banners={banners} onChange={refreshAll} />}
             {tab === "uniq" && <Uniqueizer videos={videos} onChange={refreshAll} />}
             {tab === "proxy" && <ProxyManager accounts={accounts} onChange={refreshAll} />}
@@ -1050,18 +1054,24 @@ function ProxyEditor({ a, onChange }: { a: Account; onChange: () => void }) {
 /* ================================================================
    Videos
    ================================================================ */
-function Videos({ videos, onChange }: { videos: Video[]; onChange: () => void }) {
+function Videos({ videos, folders, groups, onChange }: {
+  videos: Video[]; folders: AssetFolder[]; groups: AccountGroup[]; onChange: () => void;
+}) {
   const [busy, setBusy] = useState(false);
+  const [folder, setFolder] = useState<number | null | "none">(null);
   const [showCount, setShowCount] = useState(20);
   const toast = useToast();
   const { confirm } = useConfirm();
   const { query } = useContext(SearchCtx);
 
   const filtered = useMemo(() => {
-    if (!query) return videos;
     const q = query.toLowerCase();
-    return videos.filter((v) => v.title.toLowerCase().includes(q));
-  }, [videos, query]);
+    return videos.filter((v) => {
+      if (q && !v.title.toLowerCase().includes(q)) return false;
+      if (folder === null) return true;
+      return folder === "none" ? v.folder_id == null : v.folder_id === folder;
+    });
+  }, [videos, query, folder]);
   const visible = filtered.slice(0, showCount);
 
   async function upload(f: File | null) {
@@ -1079,6 +1089,8 @@ function Videos({ videos, onChange }: { videos: Video[]; onChange: () => void })
           {busy ? <><span className="spinner-border spinner-border-sm me-2" />Загрузка...</> : <><i className="bi bi-cloud-arrow-up me-2" /><span>Загрузить видео</span><br /><small className="text-muted">MP4, MOV, WebM</small></>}
         </label>
       </div>
+      <FoldersCard kind="video" title="Папки видео" folders={folders} groups={groups} onChange={onChange} />
+      <FolderTabs folders={folders} value={folder} onPick={setFolder} />
       <div className="vp-grid">
         {visible.map((v) => (
           <div className="vp-media-card" key={v.id}>
@@ -1088,6 +1100,8 @@ function Videos({ videos, onChange }: { videos: Video[]; onChange: () => void })
               <div className="meta">{v.width && v.height ? `${v.width}×${v.height}` : "?"} {v.duration ? `· ${v.duration.toFixed(1)}с` : ""}</div>
             </div>
             <div className="actions">
+              <FolderPicker kind="video" id={v.id} folderId={v.folder_id} folders={folders}
+                            onChange={onChange} className="me-auto" />
               <button className="btn btn-vp-danger btn-sm" onClick={async () => { if (await confirm("Удалить видео?", `Вы уверены что хотите удалить «${v.title}»?`)) { api.deleteVideo(v.id).then(() => { onChange(); toast.add("info", "Видео удалено"); }); } }}>
                 <i className="bi bi-trash" />
               </button>
@@ -1180,13 +1194,14 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
 /* ================================================================
    Post Form
    ================================================================ */
-function PostForm({ accounts, videos, banners, profiles, groups, onCreated }: {
+function PostForm({ accounts, videos, banners, profiles, groups, videoFolders, onCreated }: {
   accounts: Account[]; videos: Video[]; banners: Banner[]; profiles: UniqProfile[];
-  groups: AccountGroup[]; onCreated: () => void;
+  groups: AccountGroup[]; videoFolders: AssetFolder[]; onCreated: () => void;
 }) {
   const [picked, setPicked] = useState<number[]>([]);
   // Фильтр по группе: null — все аккаунты, -1 — только без группы, иначе id группы.
   const [groupFilter, setGroupFilter] = useState<number | null>(null);
+  const [allVideos, setAllVideos] = useState(false);   // «показать все» в списке видео
   const [videoId, setVideoId] = useState<number | null>(null);
   const [bannerId, setBannerId] = useState<number | null>(null);
   const [caption, setCaption] = useState("");
@@ -1211,6 +1226,18 @@ function PostForm({ accounts, videos, banners, profiles, groups, onCreated }: {
   const ready = shown.filter((a) => a.has_cookies && a.active);
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  // Видео, доступные выбранной группе: файл без папки или папка, открытая этой
+  // группе. «Показать все» снимает сужение — иногда нужно выложить исключение.
+  const groupForAssets = groupFilter !== null && groupFilter !== -1 ? groupFilter : null;
+  const shownVideos = allVideos ? videos : visibleToGroup(videos, videoFolders, groupForAssets);
+  const hiddenVideos = videos.length - shownVideos.length;
+
+  // Выбранное видео могло выпасть из списка — при смене группы, снятии «показать
+  // все» или правке папок. Иначе в задачу ушёл бы ролик, которого в списке не видно.
+  useEffect(() => {
+    if (videoId !== null && !shownVideos.some((v) => v.id === videoId)) setVideoId(null);
+  }, [videoId, shownVideos]);
 
   /** Выбор группы — это и есть «постить на группу»: фильтруем список и сразу
    *  отмечаем её пригодные аккаунты. «Все аккаунты» только снимает фильтр,
@@ -1321,8 +1348,20 @@ function PostForm({ accounts, videos, banners, profiles, groups, onCreated }: {
           <label className="form-label vp">Видео</label>
           <select className="form-select vp" value={videoId ?? ""} onChange={(e) => setVideoId(Number(e.target.value) || null)}>
             <option value="">— выбрать —</option>
-            {videos.map((v) => <option key={v.id} value={v.id}>{v.title}</option>)}
+            {shownVideos.map((v) => <option key={v.id} value={v.id}>{v.title}</option>)}
           </select>
+          {hiddenVideos > 0 && (
+            <label className="form-text fs-sm d-flex align-items-center gap-1 mt-1" style={{ cursor: "pointer" }}>
+              <input type="checkbox" className="form-check-input mt-0" checked={allVideos}
+                     onChange={(e) => setAllVideos(e.target.checked)} />
+              показать все ({hiddenVideos} скрыто: их папки закрыты для этой группы)
+            </label>
+          )}
+          {!allVideos && shownVideos.length === 0 && videos.length > 0 && (
+            <div className="form-text fs-sm text-warning">
+              Для этой группы нет доступных видео — разложите их по папкам на вкладке «Видео».
+            </div>
+          )}
         </div>
         <div className="col-md-6">
           <label className="form-label vp">Баннер (необязательно)</label>

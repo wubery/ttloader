@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Video
-from ..schemas import VideoOut
+from ..models import AssetFolder, Video
+from ..schemas import FolderAssign, VideoOut
 from ..services import media
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
@@ -53,6 +53,22 @@ async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_d
     db.commit()
     db.refresh(video)
     return video
+
+
+@router.patch("/{video_id}/folder", response_model=VideoOut)
+def set_folder(video_id: int, payload: FolderAssign, db: Session = Depends(get_db)):
+    """Переносит файл в папку; folder_id=null — вынуть из папки (доступно всем)."""
+    row = db.get(Video, video_id)
+    if row is None:
+        raise HTTPException(404, "Видео не найдено")
+    if payload.folder_id is not None:
+        folder = db.get(AssetFolder, payload.folder_id)
+        if folder is None or folder.kind != "video":
+            raise HTTPException(404, "Папка не найдена")
+    row.folder_id = payload.folder_id
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get("/{video_id}/file")

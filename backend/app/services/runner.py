@@ -80,16 +80,25 @@ def _resolve_profile(job: Job, account, db):
     return db.query(UniqProfile).filter(UniqProfile.is_default.is_(True)).first()
 
 
-def _pick_assets(params: dict, db) -> tuple[str | None, str | None, str | None, bool, str | None]:
-    """Выбирает файлы хука, оверлея, фона и рекламы по настройкам профиля."""
+def _pick_assets(params: dict, db, group_id: int | None = None
+                 ) -> tuple[str | None, str | None, str | None, bool, str | None]:
+    """Выбирает файлы хука, оверлея, фона и рекламы по настройкам профиля.
+
+    group_id — группа аккаунта, на который идёт публикация. Случайный выбор хука
+    и фона сужается до файлов, доступных этой группе (см. services/folders.py);
+    у оверлеев и рекламы папок нет, они берутся из всей библиотеки. Явно
+    указанный в профиле файл (asset_id) берётся как есть: это осознанная
+    настройка, молча подменять её не на что.
+    """
     from ..models import AdClip, Background, Hook, OverlayAsset
+    from . import folders
 
     hook_path = None
     hook_cfg = params.get("hook") or {}
     if hook_cfg.get("on"):
         row = db.get(Hook, hook_cfg["asset_id"]) if hook_cfg.get("asset_id") else None
         if row is None and hook_cfg.get("random", True):
-            rows = db.query(Hook).all()
+            rows = folders.visible_rows(db, Hook, "hook", group_id)
             row = random.choice(rows) if rows else None
         if row is not None:
             path = os.path.join(settings.hooks_dir, row.filename)
@@ -112,7 +121,7 @@ def _pick_assets(params: dict, db) -> tuple[str | None, str | None, str | None, 
     if canvas_cfg.get("bg") == "image":
         row = db.get(Background, canvas_cfg["bg_asset_id"]) if canvas_cfg.get("bg_asset_id") else None
         if row is None and canvas_cfg.get("bg_random", True):
-            rows = db.query(Background).all()
+            rows = folders.visible_rows(db, Background, "background", group_id)
             row = random.choice(rows) if rows else None
         if row is not None:
             path = os.path.join(settings.backgrounds_dir, row.filename)
@@ -261,17 +270,21 @@ def run_job(job_id: int) -> None:
         # слои редактора идут внутрь того же графа.
         profile = _resolve_profile(job, account, db)
         if profile is not None:
-            # слоёв редактора нет — берём одиночный баннер задачи, иначе он потеряется
-            layers = overlays or _banner_layer(job, banner)
+            # Баннер задачи и слои редактора складываются, а не заменяют друг друга:
+            # у частей длинного видео в overlays лежит подпись «Часть N», и при
+            # выборе «или» баннер молча терялся на каждой такой задаче.
+            banner_layer = _banner_layer(job, banner)
+            layers = banner_layer + overlays          # баннер ниже, слои поверх него
             job.status = JobStatus.rendering
             _append_log(job, f"Уникализация по профилю «{profile.name}»…"
-                             + (" Баннер вжигается в тот же проход." if layers and not overlays else ""))
+                             + (" Баннер вжигается в тот же проход." if banner_layer else ""))
             db.commit()
             out_name = f"job{job.id}_{int(datetime.now().timestamp())}.mp4"
             out_path = os.path.join(settings.output_dir, out_name)
             try:
                 params = json.loads(profile.params) if profile.params else {}
-                hook_path, overlay_png, background, bg_is_video, ad_path = _pick_assets(params, db)
+                hook_path, overlay_png, background, bg_is_video, ad_path = _pick_assets(
+                    params, db, getattr(account, "group_id", None))
                 uniqueizer.render(
                     video_path=video_path,
                     output_path=out_path,
@@ -298,15 +311,18 @@ def run_job(job_id: int) -> None:
             db.commit()
 
         elif overlays:
+            # Баннер задачи кладём под слои — без этого части длинного видео
+            # (у них в overlays подпись «Часть N») теряли баннер и здесь тоже.
+            layers = _banner_layer(job, banner) + overlays
             job.status = JobStatus.rendering
-            _append_log(job, f"Накладываю слои ({len(overlays)}) через ffmpeg…")
+            _append_log(job, f"Накладываю слои ({len(layers)}) через ffmpeg…")
             db.commit()
             out_name = f"job{job.id}_{int(datetime.now().timestamp())}.mp4"
             out_path = os.path.join(settings.output_dir, out_name)
             try:
                 media.render_with_overlays(
                     video_path=video_path,
-                    overlays=overlays,
+                    overlays=layers,
                     output_path=out_path,
                     uniqueize=bool(getattr(account, "uniqueize", True)),
                 )

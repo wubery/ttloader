@@ -32,6 +32,19 @@ export interface Account {
   login_error: string | null;
 }
 
+/** Папка внутри библиотеки (видео / хуки / фоны).
+ *  Пустой group_ids = папка ничего не ограничивает, просто полка. */
+export interface AssetFolder {
+  id: number;
+  kind: FolderKind;
+  name: string;
+  group_ids: number[];
+  items_count: number;
+  created_at: string;
+}
+
+export type FolderKind = "video" | "hook" | "background";
+
 /** Группа аккаунтов: когорта для проверки гипотез постинга. */
 export interface AccountGroup {
   id: number;
@@ -99,6 +112,8 @@ export interface Video {
   height: number | null;
   duration: number | null;
   created_at: string;
+  /** Папка библиотеки; null — файл доступен всем группам */
+  folder_id: number | null;
 }
 
 export type Motion = "none" | "drift" | "bounce" | "slide";
@@ -150,6 +165,8 @@ export interface Hook {
   height: number | null;
   duration: number | null;
   created_at: string;
+  /** Папка библиотеки; null — файл доступен всем группам */
+  folder_id: number | null;
 }
 
 export interface OverlayAsset {
@@ -175,6 +192,8 @@ export interface Background {
   filename: string;
   is_video: boolean;
   created_at: string;
+  /** Папка библиотеки; null — файл доступен всем группам */
+  folder_id: number | null;
 }
 
 /** Профиль уникализации: каждый параметр — диапазон [от, до]; равные границы = ручное значение */
@@ -373,6 +392,27 @@ export const api = {
   },
   deleteBackground: (id: number) => fetch(`/api/backgrounds/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
   backgroundFileUrl: (id: number) => `/api/backgrounds/${id}/file`,
+
+  // папки библиотек
+  assetFolders: (kind?: FolderKind) =>
+    fetch("/api/asset-folders" + (kind ? `?kind=${kind}` : "")).then((r) => j<AssetFolder[]>(r)),
+  createAssetFolder: (b: { kind: FolderKind; name: string; group_ids?: number[] }) =>
+    fetch("/api/asset-folders", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<AssetFolder>(r)),
+  updateAssetFolder: (id: number, b: Partial<{ name: string; group_ids: number[] }>) =>
+    fetch(`/api/asset-folders/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<AssetFolder>(r)),
+  deleteAssetFolder: (id: number) =>
+    fetch(`/api/asset-folders/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  setAssetFolder: (kind: FolderKind, id: number, folderId: number | null) => {
+    const base = { video: "videos", hook: "hooks", background: "backgrounds" }[kind];
+    return fetch(`/api/${base}/${id}/folder`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder_id: folderId }),
+    }).then((r) => j<any>(r));
+  },
 
   // группы аккаунтов
   accountGroups: () => fetch("/api/account-groups").then((r) => j<AccountGroup[]>(r)),

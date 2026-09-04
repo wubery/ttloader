@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Hook
-from ..schemas import HookOut
+from ..models import AssetFolder, Hook
+from ..schemas import FolderAssign, HookOut
 from ..services import media
 
 router = APIRouter(prefix="/api/hooks", tags=["hooks"])
@@ -61,6 +61,22 @@ async def upload_hook(
     db.commit()
     db.refresh(hook)
     return hook
+
+
+@router.patch("/{hook_id}/folder", response_model=HookOut)
+def set_folder(hook_id: int, payload: FolderAssign, db: Session = Depends(get_db)):
+    """Переносит файл в папку; folder_id=null — вынуть из папки (доступно всем)."""
+    row = db.get(Hook, hook_id)
+    if row is None:
+        raise HTTPException(404, "Хук не найден")
+    if payload.folder_id is not None:
+        folder = db.get(AssetFolder, payload.folder_id)
+        if folder is None or folder.kind != "hook":
+            raise HTTPException(404, "Папка не найдена")
+    row.folder_id = payload.folder_id
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get("/{hook_id}/file")

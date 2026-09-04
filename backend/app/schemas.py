@@ -183,6 +183,7 @@ class VideoOut(BaseModel):
     width: int | None
     height: int | None
     duration: float | None
+    folder_id: int | None = None
     created_at: datetime
 
 
@@ -196,6 +197,7 @@ class HookOut(BaseModel):
     width: int | None
     height: int | None
     duration: float | None
+    folder_id: int | None = None
     created_at: datetime
 
 
@@ -227,7 +229,35 @@ class BackgroundOut(BaseModel):
     name: str
     filename: str
     is_video: bool
+    folder_id: int | None = None
     created_at: datetime
+
+
+# ---------- Папки библиотек ----------
+class AssetFolderCreate(BaseModel):
+    kind: str                      # video | hook | background
+    name: str
+    group_ids: list[int] = []
+
+
+class AssetFolderUpdate(BaseModel):
+    name: str | None = None
+    group_ids: list[int] | None = None
+
+
+class AssetFolderOut(BaseModel):
+    id: int
+    kind: str
+    name: str
+    group_ids: list[int]           # пустой список = папка ничего не ограничивает
+    items_count: int
+    created_at: datetime
+
+
+class FolderAssign(BaseModel):
+    """Перенос файла в папку; null — вынуть из папки."""
+
+    folder_id: int | None = None
 
 
 # ---------- Группы аккаунтов ----------

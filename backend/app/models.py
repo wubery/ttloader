@@ -3,7 +3,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (Column, DateTime, Enum, Float, ForeignKey, Integer, String, Table,
+                        Text, UniqueConstraint, func)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -127,6 +128,35 @@ class Account(Base):
         return False
 
 
+# Папка ↔ группы: одну папку можно открыть сразу нескольким когортам.
+folder_groups = Table(
+    "folder_groups",
+    Base.metadata,
+    Column("folder_id", ForeignKey("asset_folders.id"), primary_key=True),
+    Column("group_id", ForeignKey("account_groups.id"), primary_key=True),
+)
+
+
+class AssetFolder(Base):
+    """Папка внутри библиотеки: видео, хуков или фонов.
+
+    Папки у каждой библиотеки свои (различаются по kind) — имена не пересекаются
+    между библиотеками. Смысл в группах: если на папку повешены когорты, её
+    содержимое достаётся только им. Папка БЕЗ групп ничего не ограничивает — это
+    просто способ разложить файлы по полкам, как и отсутствие папки у файла.
+    """
+
+    __tablename__ = "asset_folders"
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_folder_kind_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))          # video | hook | background
+    name: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    groups: Mapped[list[AccountGroup]] = relationship(secondary=folder_groups, lazy="selectin")
+
+
 class Video(Base):
     """Исходное видео, загруженное через панель."""
 
@@ -138,6 +168,7 @@ class Video(Base):
     width: Mapped[int | None] = mapped_column(Integer, default=None)
     height: Mapped[int | None] = mapped_column(Integer, default=None)
     duration: Mapped[float | None] = mapped_column(Float, default=None)
+    folder_id: Mapped[int | None] = mapped_column(ForeignKey("asset_folders.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     jobs: Mapped[list[Job]] = relationship(back_populates="video")
@@ -158,6 +189,7 @@ class Hook(Base):
     width: Mapped[int | None] = mapped_column(Integer, default=None)
     height: Mapped[int | None] = mapped_column(Integer, default=None)
     duration: Mapped[float | None] = mapped_column(Float, default=None)
+    folder_id: Mapped[int | None] = mapped_column(ForeignKey("asset_folders.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
@@ -203,6 +235,7 @@ class Background(Base):
     name: Mapped[str] = mapped_column(String(300))
     filename: Mapped[str] = mapped_column(String(500))   # относительно backgrounds_dir
     is_video: Mapped[bool] = mapped_column(default=False, server_default="0")
+    folder_id: Mapped[int | None] = mapped_column(ForeignKey("asset_folders.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

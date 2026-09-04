@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, AdClip, Background, Hook, OverlayAsset, UniqProfile, Video } from "./api";
+import { api, AccountGroup, AdClip, AssetFolder, Background, FolderKind, Hook, OverlayAsset,
+         UniqProfile, Video } from "./api";
+import { FolderPicker, FolderTabs, FoldersCard } from "./Folders";
 
 /* ================================================================
    Вкладка «Уникализация»: профили + библиотеки хуков и оверлеев.
@@ -102,6 +104,8 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
   const [assets, setAssets] = useState<OverlayAsset[]>([]);
   const [backgrounds, setBackgrounds] = useState<Background[]>([]);
   const [ads, setAds] = useState<AdClip[]>([]);
+  const [groups, setGroups] = useState<AccountGroup[]>([]);
+  const [folders, setFolders] = useState<AssetFolder[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [draft, setDraft] = useState<Params>({});
   const [name, setName] = useState("");
@@ -112,10 +116,12 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
   const current = useMemo(() => profiles.find((p) => p.id === sel) ?? null, [profiles, sel]);
 
   async function reload() {
-    const [p, h, a, bg, ad] = await Promise.all([
+    const [p, h, a, bg, ad, gr, fl] = await Promise.all([
       api.uniqProfiles(), api.hooks(), api.overlayAssets(), api.backgrounds(), api.ads(),
+      api.accountGroups(), api.assetFolders(),
     ]);
     setProfiles(p); setHooks(h); setAssets(a); setBackgrounds(bg); setAds(ad);
+    setGroups(gr); setFolders(fl);
     onChange?.();   // селекты профиля в других вкладках берут список из Dashboard
     if (sel === null && p.length) select(p[0]);
   }
@@ -376,7 +382,9 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
                     hint="Короткие заставки, которые клеятся в начало ролика."
                     accept="video/*" items={hooks}
                     upload={(f, n) => api.uploadHook(f, n)} remove={(id) => api.deleteHook(id)}
-                    fileUrl={(id) => api.hookFileUrl(id)} isVideo onChange={reload} />
+                    fileUrl={(id) => api.hookFileUrl(id)} isVideo onChange={reload}
+                    folderKind="hook" folders={folders.filter((f) => f.kind === "hook")}
+                    groups={groups} />
 
       <MediaLibrary title="Реклама" icon="bi-megaphone"
                     hint="Короткие ролики, которые вставляются внутрь части видео."
@@ -388,7 +396,9 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
                     hint="Картинка или видео под рамку: видно по краям вокруг вписанного ролика."
                     accept="image/*,video/*" items={backgrounds}
                     upload={(f, n) => api.uploadBackground(f, n)} remove={(id) => api.deleteBackground(id)}
-                    fileUrl={(id) => api.backgroundFileUrl(id)} onChange={reload} />
+                    fileUrl={(id) => api.backgroundFileUrl(id)} onChange={reload}
+                    folderKind="background" folders={folders.filter((f) => f.kind === "background")}
+                    groups={groups} />
 
       <MediaLibrary title="Оверлеи" icon="bi-layers"
                     hint="PNG с прозрачностью на весь кадр: текстуры, рамки, лёгкие засветки."
@@ -399,19 +409,29 @@ export function Uniqueizer({ videos, onChange }: { videos: Video[]; onChange?: (
   );
 }
 
-function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUrl, isVideo, onChange }: {
+function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUrl, isVideo,
+                       onChange, folderKind, folders = [], groups = [] }: {
   title: string; icon: string; hint: string; accept: string;
-  items: { id: number; name: string; is_video?: boolean }[];
+  items: { id: number; name: string; is_video?: boolean; folder_id?: number | null }[];
   upload: (f: File, name: string) => Promise<any>;
   remove: (id: number) => Promise<any>;
   fileUrl: (id: number) => string;
   /** Библиотека целиком из видео (хуки, реклама). У фонов тип свой у каждого файла. */
   isVideo?: boolean;
   onChange: () => Promise<void> | void;
+  /** Папки есть только у хуков и фонов; у оверлеев и рекламы их нет. */
+  folderKind?: FolderKind;
+  folders?: AssetFolder[];
+  groups?: AccountGroup[];
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [folder, setFolder] = useState<number | null | "none">(null);
+
+  const shown = !folderKind || folder === null
+    ? items
+    : items.filter((it) => (folder === "none" ? it.folder_id == null : it.folder_id === folder));
 
   return (
     <div className="vp-card">
@@ -433,8 +453,15 @@ function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUr
         </label>
         <span className="fs-sm text-muted">{hint}</span>
       </div>
+      {folderKind && (
+        <div className="mt-3">
+          <FoldersCard kind={folderKind} title="Папки" folders={folders} groups={groups}
+                       onChange={() => onChange()} />
+          <FolderTabs folders={folders} value={folder} onPick={setFolder} />
+        </div>
+      )}
       <div className="vp-grid mt-3">
-        {items.map((it) => (
+        {shown.map((it) => (
           <div className="vp-media-card" key={it.id}>
             {/* preload+controls обязательны: без них браузер не декодирует первый кадр
                 и вместо превью виден чёрный прямоугольник */}
@@ -443,6 +470,10 @@ function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUr
               : <img src={fileUrl(it.id)} className="thumb" alt={it.name} />}
             <div className="info"><div className="title" title={it.name}>{it.name}</div></div>
             <div className="actions">
+              {folderKind && (
+                <FolderPicker kind={folderKind} id={it.id} folderId={it.folder_id ?? null}
+                              folders={folders} onChange={() => onChange()} className="me-auto" />
+              )}
               <button className="btn btn-vp-danger btn-sm"
                       onClick={async () => { await remove(it.id); await onChange(); }}>
                 <i className="bi bi-trash" />
@@ -450,7 +481,7 @@ function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUr
             </div>
           </div>
         ))}
-        {items.length === 0 && <div className="fs-sm text-muted">Пока пусто.</div>}
+        {shown.length === 0 && <div className="fs-sm text-muted">Пока пусто.</div>}
       </div>
     </div>
   );

@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Background
-from ..schemas import BackgroundOut
+from ..models import AssetFolder, Background
+from ..schemas import FolderAssign, BackgroundOut
 
 router = APIRouter(prefix="/api/backgrounds", tags=["backgrounds"])
 
@@ -53,6 +53,22 @@ async def upload_background(
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.patch("/{bg_id}/folder", response_model=BackgroundOut)
+def set_folder(bg_id: int, payload: FolderAssign, db: Session = Depends(get_db)):
+    """Переносит файл в папку; folder_id=null — вынуть из папки (доступно всем)."""
+    row = db.get(Background, bg_id)
+    if row is None:
+        raise HTTPException(404, "Фон не найден")
+    if payload.folder_id is not None:
+        folder = db.get(AssetFolder, payload.folder_id)
+        if folder is None or folder.kind != "background":
+            raise HTTPException(404, "Папка не найдена")
+    row.folder_id = payload.folder_id
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get("/{bg_id}/file")

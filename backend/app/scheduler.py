@@ -175,6 +175,13 @@ def _cleanup_output() -> None:
     if removed:
         log.info("Очистка output_dir: удалено файлов — %s", removed)
 
+    # Заодно — брошенные куски незавершённых заливок (закрыли вкладку на середине).
+    from .services.storage import cleanup_stale_parts
+
+    stale = cleanup_stale_parts(settings.videos_dir)
+    if stale:
+        log.info("Очистка недозалитых кусков: удалено файлов — %s", stale)
+
 
 def start_scheduler() -> None:
     _scheduler.add_job(_poll_due_jobs, "interval", seconds=60, id="poll_due_jobs",

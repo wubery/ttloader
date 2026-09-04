@@ -230,6 +230,17 @@ export interface Job {
   updated_at: string;
 }
 
+/**
+ * Ролики крупнее порога заливаются кусками. Причина не в бэкенде: между браузером
+ * и панелью почти всегда есть чужой прокси, который отбрасывает большое тело
+ * запроса целиком (у Cloudflare это 100 МБ), и браузер показывает голое
+ * «Failed to fetch». Куски по 8 МБ — обычные маленькие запросы, они проходят
+ * везде, а обрыв стоит одного куска, который просто повторяется.
+ */
+const CHUNK_SIZE = 8 * 1024 * 1024;
+const CHUNK_THRESHOLD = 16 * 1024 * 1024;
+const CHUNK_RETRIES = 3;
+
 /** Ошибка API с HTTP-кодом: по нему отличаем «нужно подтверждение» от отказа. */
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -296,6 +307,44 @@ export interface SettingsData {
   tg_chat_id: string | null;
   tg_login_enabled: boolean;
   ms_client_id: string | null;
+}
+
+async function uploadInChunks(file: File, onProgress?: (p: number) => void): Promise<Video> {
+  const uploadId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const total = Math.ceil(file.size / CHUNK_SIZE);
+
+  for (let i = 0; i < total; i++) {
+    const blob = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const fd = new FormData();
+    fd.append("upload_id", uploadId);
+    fd.append("index", String(i));
+    fd.append("file", blob, file.name);
+
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < CHUNK_RETRIES; attempt++) {
+      try {
+        await upload<any>("/api/videos/chunk", fd, (p) =>
+          onProgress?.(Math.round(((i + p / 100) / total) * 100)));
+        lastErr = null;
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        // Отказ по существу (нет места, неверный запрос) повторять бессмысленно
+        if (e instanceof ApiError && e.status >= 400) break;
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+    if (lastErr) {
+      fetch(`/api/videos/chunk/${uploadId}`, { method: "DELETE" }).catch(() => {});
+      throw lastErr;
+    }
+  }
+
+  return fetch("/api/videos/chunk/finish", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id: uploadId, filename: file.name }),
+  }).then((r) => j<Video>(r));
 }
 
 export const api = {
@@ -477,9 +526,12 @@ export const api = {
   // videos
   videos: () => fetch("/api/videos").then((r) => j<Video[]>(r)),
   uploadVideo: (file: File, onProgress?: (percent: number) => void) => {
-    const fd = new FormData();
-    fd.append("file", file);
-    return upload<Video>("/api/videos", fd, onProgress);
+    if (file.size <= CHUNK_THRESHOLD) {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload<Video>("/api/videos", fd, onProgress);
+    }
+    return uploadInChunks(file, onProgress);
   },
   /** force=true удаляет ролик вместе с его задачами (панель сначала спрашивает). */
   deleteVideo: (id: number, force = false) =>

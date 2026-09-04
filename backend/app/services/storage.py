@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import time
 import uuid
 
 from fastapi import HTTPException, UploadFile
@@ -88,3 +90,80 @@ def _drop(path: str) -> None:
             os.remove(path)
     except OSError:
         pass
+
+
+# --- Заливка кусками ----------------------------------------------------------
+# Между браузером и панелью почти всегда стоит чужой прокси (Cloudflare режет тело
+# на 100 МБ, корпоративные — и того раньше), и целый ролик такой прокси отбрасывает
+# ещё до бэкенда: браузер видит просто «Failed to fetch». Поэтому длинное видео
+# приходит кусками по несколько мегабайт — каждый кусок это обычный маленький
+# запрос, который проходит везде, а обрыв стоит одного куска, а не всей заливки.
+
+PARTS_SUBDIR = ".parts"
+UPLOAD_ID_RE = re.compile(r"^[a-f0-9]{8,64}$")
+# Брошенные куски (закрыли вкладку на середине) убираем через сутки
+PARTS_TTL_SECONDS = 24 * 3600
+
+
+def _parts_dir(directory: str) -> str:
+    path = os.path.join(directory, PARTS_SUBDIR)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def part_path(directory: str, upload_id: str) -> str:
+    """Путь к накопительному файлу куска. Идентификатор проверяем: он приходит
+    от клиента и подставляется в имя файла."""
+    if not UPLOAD_ID_RE.match(upload_id or ""):
+        raise HTTPException(400, "Некорректный идентификатор загрузки")
+    return os.path.join(_parts_dir(directory), f"{upload_id}.part")
+
+
+async def append_chunk(file: UploadFile, directory: str, upload_id: str, first: bool) -> int:
+    """Дописывает кусок в накопительный файл, возвращает его текущий размер."""
+    path = part_path(directory, upload_id)
+    free, _ = free_space(directory)
+    if free < RESERVE_BYTES:
+        raise HTTPException(507, f"На диске сервера осталось {_human(free)} — заливка остановлена.")
+    try:
+        with open(path, "wb" if first else "ab") as f:
+            while chunk := await file.read(CHUNK):
+                f.write(chunk)
+        return os.path.getsize(path)
+    except OSError as e:
+        _drop(path)
+        if e.errno == 28:
+            raise HTTPException(507, "Место на диске кончилось — заливка прервана.") from e
+        raise HTTPException(500, f"Не удалось сохранить кусок: {e}") from e
+
+
+def finish_chunks(directory: str, upload_id: str, ext: str) -> str:
+    """Превращает накопленный файл в обычный файл библиотеки."""
+    src = part_path(directory, upload_id)
+    if not os.path.exists(src):
+        raise HTTPException(404, "Загрузка не найдена — начните заново")
+    fname = f"{uuid.uuid4().hex}{ext}"
+    os.replace(src, os.path.join(directory, fname))
+    return fname
+
+
+def abort_chunks(directory: str, upload_id: str) -> None:
+    _drop(part_path(directory, upload_id))
+
+
+def cleanup_stale_parts(directory: str) -> int:
+    """Удаляет брошенные куски. Зовётся уборщиком по расписанию."""
+    path = os.path.join(directory, PARTS_SUBDIR)
+    if not os.path.isdir(path):
+        return 0
+    removed = 0
+    deadline = time.time() - PARTS_TTL_SECONDS
+    for name in os.listdir(path):
+        full = os.path.join(path, name)
+        try:
+            if os.path.isfile(full) and os.path.getmtime(full) < deadline:
+                os.remove(full)
+                removed += 1
+        except OSError:
+            pass
+    return removed

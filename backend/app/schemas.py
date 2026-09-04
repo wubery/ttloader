@@ -174,6 +174,11 @@ class SettingsUpdate(BaseModel):
 
 
 # ---------- Videos ----------
+class ChunkFinish(BaseModel):
+    """Завершение заливки кусками: собранный файл превращается в ролик библиотеки."""
+
+    upload_id: str
+    filename: str
 class VideoOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

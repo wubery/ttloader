@@ -83,3 +83,18 @@ def test_no_space_stops_chunk_upload(client, monkeypatch):
     monkeypatch.setattr(storage, "free_space", lambda p: (1024, 10 * 1024))
     r = _chunk(client, "9" * 16, 0, b"1" * 100)
     assert r.status_code == 507
+
+
+def test_upload_probe_reports_received_size(client):
+    """Проба канала: сервер отвечает, сколько байт до него реально дошло."""
+    r = client.post("/api/system/upload-probe",
+                    files={"file": ("probe.bin", io.BytesIO(b"0" * 3000), "application/octet-stream")})
+    assert r.status_code == 200, r.text
+    assert r.json()["received"] == 3000
+
+
+def test_upload_probe_saves_nothing(client):
+    before = set(os.listdir(settings.videos_dir))
+    client.post("/api/system/upload-probe",
+                files={"file": ("probe.bin", io.BytesIO(b"0" * 1000), "application/octet-stream")})
+    assert set(os.listdir(settings.videos_dir)) == before

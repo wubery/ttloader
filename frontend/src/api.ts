@@ -476,6 +476,14 @@ export const api = {
   deleteBackground: (id: number) => fetch(`/api/backgrounds/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
   backgroundFileUrl: (id: number) => `/api/backgrounds/${id}/file`,
 
+  /** Проверка канала: шлёт тело заданного размера и возвращает, сколько дошло.
+   *  Ничего не сохраняет — нужен, чтобы найти лимит чужого прокси. */
+  uploadProbe: (bytes: number) => {
+    const fd = new FormData();
+    fd.append("file", new Blob([new Uint8Array(bytes)]), "probe.bin");
+    return upload<{ ok: boolean; received: number }>("/api/system/upload-probe", fd);
+  },
+
   // папки библиотек
   assetFolders: (kind?: FolderKind) =>
     fetch("/api/asset-folders" + (kind ? `?kind=${kind}` : "")).then((r) => j<AssetFolder[]>(r)),

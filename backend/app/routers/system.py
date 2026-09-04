@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -77,6 +77,21 @@ def set_git_token(payload: GitTokenIn):
     _write("git_token", tok, 0o600)
     _write("status", "Токен передан апдейтеру, применяется…")
     return {"ok": True}
+
+
+@router.post("/upload-probe")
+async def upload_probe(file: UploadFile = File(...)):
+    """Принимает тело и возвращает его размер — ничего не сохраняет.
+
+    Нужен, чтобы найти лимит на размер запроса ВНЕ панели: между браузером и
+    сервером обычно стоит чужой прокси (Cloudflare режет тело на 100 МБ), и он
+    отбрасывает запрос до бэкенда — браузер показывает просто «Failed to fetch».
+    Панель шлёт сюда тела разного размера и смотрит, с какого начинается обрыв.
+    """
+    received = 0
+    while chunk := await file.read(1024 * 1024):
+        received += len(chunk)
+    return {"ok": True, "received": received}
 
 
 @router.post("/update")

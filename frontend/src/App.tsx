@@ -2096,6 +2096,8 @@ function Settings() {
   const [ver, setVer] = useState<SystemVersion | null>(null);
   const [gitToken, setGitToken] = useState("");
   const [gitOpen, setGitOpen] = useState(false);
+  const [probe, setProbe] = useState<{ mb: number; ok: boolean; note: string }[]>([]);
+  const [probing, setProbing] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -2121,6 +2123,24 @@ function Settings() {
       setGitToken("");
       toast.add("success", "Токен передан — апдейтер проверит доступ через несколько секунд.");
     } catch (e: any) { toast.add("error", e.message); }
+  }
+
+  /** Ищем предел размера запроса ВНЕ панели: чужой прокси (Cloudflare режет тело
+   *  на 100 МБ) отбрасывает загрузку до сервера, и браузер показывает только
+   *  «Failed to fetch». Шлём тела по возрастанию и смотрим, где начинается обрыв. */
+  async function runProbe() {
+    setProbing(true); setProbe([]);
+    for (const mb of [1, 8, 32, 100, 200]) {
+      try {
+        const r = await api.uploadProbe(mb * 1024 * 1024);
+        const got = Math.round(r.received / 1024 / 1024);
+        setProbe((p) => [...p, { mb, ok: true, note: `дошло ${got} МБ` }]);
+      } catch (e: any) {
+        setProbe((p) => [...p, { mb, ok: false, note: e.message }]);
+        break;   // дальше пробовать смысла нет — предел найден
+      }
+    }
+    setProbing(false);
   }
 
   async function save() {
@@ -2191,6 +2211,43 @@ function Settings() {
             <button className="btn btn-vp" onClick={save}><i className="bi bi-check-lg me-1" />Сохранить</button>
           </div>
         </div>
+      </div>
+
+      {/* Проверка канала загрузки */}
+      <div className="vp-card">
+        <div className="vp-card-header">
+          <h3><i className="bi bi-speedometer2 me-2 text-accent" />Проверка загрузки</h3>
+        </div>
+        <p className="fs-sm text-muted">
+          Если видео не заливается с ошибкой «Failed to fetch», размер запроса режет
+          не панель, а что-то между браузером и сервером — обычно внешний прокси
+          (у Cloudflare предел 100 МБ). Проверка шлёт пустые тела по возрастанию и
+          показывает, на каком размере обрывается. Ничего не сохраняется.
+        </p>
+        <button className="btn btn-vp-outline btn-sm" disabled={probing} onClick={runProbe}>
+          {probing
+            ? <><span className="spinner-border spinner-border-sm me-2" />Проверяю…</>
+            : <><i className="bi bi-arrow-up-circle me-1" />Проверить предел загрузки</>}
+        </button>
+        {probe.length > 0 && (
+          <div className="mt-2">
+            {probe.map((r) => (
+              <div key={r.mb} className="fs-sm d-flex align-items-center gap-2">
+                <span className={`badge-vp ${r.ok ? "badge-vp-success" : "badge-vp-danger"}`}>
+                  {r.mb} МБ
+                </span>
+                <span className="text-muted">{r.note}</span>
+              </div>
+            ))}
+            {probe.some((r) => !r.ok) && (
+              <div className="form-text fs-sm">
+                Предел найден: до {probe.filter((r) => r.ok).pop()?.mb ?? 0} МБ запросы проходят.
+                Видео панель заливает кусками по 8 МБ, поэтому такой предел ей не мешает —
+                но если обрывается уже на 8 МБ, дело в самом канале.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Update */}

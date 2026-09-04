@@ -92,9 +92,22 @@ def health():
     except ImportError:
         playwright_ok = False
 
+    # Свободное место — частая причина «загрузка оборвалась»: диск кончается молча,
+    # и наружу это выглядит сетевой ошибкой браузера.
+    disk_free = disk_total = None
+    try:
+        from .services.storage import free_space
+
+        settings.ensure_dirs()
+        disk_free, disk_total = free_space(settings.data_dir)
+    except OSError:
+        pass
+
     return {
         "status": "ok",
         "ffmpeg": ffmpeg_ok,
         "ffmpeg_error": ffmpeg_err,
         "playwright": playwright_ok,
+        "disk_free": disk_free,
+        "disk_total": disk_total,
     }

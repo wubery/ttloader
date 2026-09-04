@@ -230,6 +230,13 @@ export interface Job {
   updated_at: string;
 }
 
+/** Ошибка API с HTTP-кодом: по нему отличаем «нужно подтверждение» от отказа. */
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
     let detail = r.statusText;
@@ -237,9 +244,36 @@ async function j<T>(r: Response): Promise<T> {
       const b = await r.json();
       detail = b.detail || JSON.stringify(b);
     } catch {}
-    throw new Error(detail);
+    throw new ApiError(detail, r.status);
   }
   return r.json();
+}
+
+/**
+ * Заливка файла через XHR, а не fetch: fetch не умеет отдавать прогресс отправки,
+ * и длинный ролик заливался «вслепую», а обрыв показывался как «Failed to fetch»
+ * без единой подробности.
+ */
+function upload<T>(url: string, fd: FormData, onProgress?: (percent: number) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body: any = null;
+      try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body as T);
+      else reject(new ApiError(body?.detail || `Ошибка ${xhr.status}`, xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError(
+      "Соединение с сервером оборвалось во время загрузки. Файл не сохранён — " +
+      "проверьте связь и свободное место на сервере.", 0));
+    xhr.onabort = () => reject(new ApiError("Загрузка отменена", 0));
+    xhr.ontimeout = () => reject(new ApiError("Сервер не ответил вовремя", 0));
+    xhr.send(fd);
+  });
 }
 
 export interface AuthMe {
@@ -442,12 +476,14 @@ export const api = {
 
   // videos
   videos: () => fetch("/api/videos").then((r) => j<Video[]>(r)),
-  uploadVideo: (file: File) => {
+  uploadVideo: (file: File, onProgress?: (percent: number) => void) => {
     const fd = new FormData();
     fd.append("file", file);
-    return fetch("/api/videos", { method: "POST", body: fd }).then((r) => j<Video>(r));
+    return upload<Video>("/api/videos", fd, onProgress);
   },
-  deleteVideo: (id: number) => fetch(`/api/videos/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  /** force=true удаляет ролик вместе с его задачами (панель сначала спрашивает). */
+  deleteVideo: (id: number, force = false) =>
+    fetch(`/api/videos/${id}${force ? "?force=true" : ""}`, { method: "DELETE" }).then((r) => j<any>(r)),
   videoFileUrl: (id: number) => `/api/videos/${id}/file`,
 
   // banners

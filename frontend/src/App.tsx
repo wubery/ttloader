@@ -1058,6 +1058,7 @@ function Videos({ videos, folders, groups, onChange }: {
   videos: Video[]; folders: AssetFolder[]; groups: AccountGroup[]; onChange: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [folder, setFolder] = useState<number | null | "none">(null);
   const [showCount, setShowCount] = useState(20);
   const toast = useToast();
@@ -1076,9 +1077,28 @@ function Videos({ videos, folders, groups, onChange }: {
 
   async function upload(f: File | null) {
     if (!f) return;
-    setBusy(true);
-    try { await api.uploadVideo(f); onChange(); toast.add("success", "Видео загружено"); }
-    catch (e: any) { toast.add("error", e.message); } finally { setBusy(false); }
+    setBusy(true); setProgress(0);
+    try { await api.uploadVideo(f, setProgress); onChange(); toast.add("success", "Видео загружено"); }
+    catch (e: any) { toast.add("error", e.message); }
+    finally { setBusy(false); setProgress(0); }
+  }
+
+  /** Удаление ролика, на который есть задачи, требует отдельного подтверждения:
+   *  бэкенд отвечает 409 и говорит, сколько задач будет стёрто вместе с ним. */
+  async function remove(v: Video) {
+    if (!(await confirm("Удалить видео?", `Вы уверены что хотите удалить «${v.title}»?`))) return;
+    try {
+      await api.deleteVideo(v.id);
+      onChange(); toast.add("info", "Видео удалено");
+    } catch (e: any) {
+      if (e.status !== 409) { toast.add("error", e.message); return; }
+      if (!(await confirm("Видео используется", `${e.message} Удалить вместе с задачами?`))) return;
+      try {
+        const r = await api.deleteVideo(v.id, true);
+        onChange();
+        toast.add("info", `Видео удалено вместе с задачами (${r.deleted_jobs})`);
+      } catch (x: any) { toast.add("error", x.message); }
+    }
   }
 
   return (
@@ -1086,7 +1106,16 @@ function Videos({ videos, folders, groups, onChange }: {
       <div className="vp-card">
         <label className="vp-dropzone">
           <input type="file" accept="video/*" hidden disabled={busy} onChange={(e) => upload(e.target.files?.[0] ?? null)} />
-          {busy ? <><span className="spinner-border spinner-border-sm me-2" />Загрузка...</> : <><i className="bi bi-cloud-arrow-up me-2" /><span>Загрузить видео</span><br /><small className="text-muted">MP4, MOV, WebM</small></>}
+          {busy ? (
+            <>
+              <span className="spinner-border spinner-border-sm me-2" />
+              Загрузка… {progress}%
+              <div className="progress mt-2" style={{ height: 6, width: 220 }}>
+                <div className="progress-bar" style={{ width: `${progress}%` }} />
+              </div>
+              <small className="text-muted mt-1">Большой файл заливается несколько минут — не закрывайте вкладку.</small>
+            </>
+          ) : <><i className="bi bi-cloud-arrow-up me-2" /><span>Загрузить видео</span><br /><small className="text-muted">MP4, MOV, WebM — размер не ограничен</small></>}
         </label>
       </div>
       <FoldersCard kind="video" title="Папки видео" folders={folders} groups={groups} onChange={onChange} />
@@ -1102,7 +1131,7 @@ function Videos({ videos, folders, groups, onChange }: {
             <div className="actions">
               <FolderPicker kind="video" id={v.id} folderId={v.folder_id} folders={folders}
                             onChange={onChange} className="me-auto" />
-              <button className="btn btn-vp-danger btn-sm" onClick={async () => { if (await confirm("Удалить видео?", `Вы уверены что хотите удалить «${v.title}»?`)) { api.deleteVideo(v.id).then(() => { onChange(); toast.add("info", "Видео удалено"); }); } }}>
+              <button className="btn btn-vp-danger btn-sm" onClick={() => remove(v)}>
                 <i className="bi bi-trash" />
               </button>
             </div>

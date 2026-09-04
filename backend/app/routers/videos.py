@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -9,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import AssetFolder, Video
+from ..models import AssetFolder, Job, Video
 from ..schemas import FolderAssign, VideoOut
-from ..services import media
+from ..services import media, storage
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -30,11 +29,8 @@ async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_d
         raise HTTPException(400, f"Неподдерживаемый формат: {ext}. Разрешены: {', '.join(sorted(ALLOWED_EXT))}")
 
     settings.ensure_dirs()
-    fname = f"{uuid.uuid4().hex}{ext}"
+    fname = await storage.save_upload(file, settings.videos_dir, ext)
     path = os.path.join(settings.videos_dir, fname)
-    with open(path, "wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            f.write(chunk)
 
     width = height = None
     duration = None
@@ -83,13 +79,36 @@ def get_video_file(video_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{video_id}")
-def delete_video(video_id: int, db: Session = Depends(get_db)):
+def delete_video(video_id: int, force: bool = False, db: Session = Depends(get_db)):
+    """Удаляет видео. С задачами — только по force.
+
+    jobs.video_id объявлен NOT NULL, поэтому обычное удаление ролика, на который
+    ссылается хоть одна задача, падало на уровне БД пятисоткой («не могу удалить
+    старые видео»). Теперь панель честно говорит, сколько задач мешает, и удаляет
+    их вместе с роликом, если пользователь подтвердил: задача без исходника всё
+    равно нерабочая. Вместе с задачами убираем и их отрендеренные файлы.
+    """
     video = db.get(Video, video_id)
     if video is None:
         raise HTTPException(404, "Видео не найдено")
+
+    jobs = db.query(Job).filter(Job.video_id == video_id).all()
+    if jobs and not force:
+        raise HTTPException(
+            409,
+            f"На это видео завязано задач: {len(jobs)}. "
+            f"Удаление сотрёт их вместе с историей публикаций.",
+        )
+    for job in jobs:
+        if job.output_filename:
+            rendered = os.path.join(settings.output_dir, job.output_filename)
+            if os.path.exists(rendered):
+                os.remove(rendered)
+        db.delete(job)
+
     path = os.path.join(settings.videos_dir, video.filename)
     if os.path.exists(path):
         os.remove(path)
     db.delete(video)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "deleted_jobs": len(jobs)}

@@ -1059,6 +1059,8 @@ function Videos({ videos, folders, groups, onChange }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [queue, setQueue] = useState<{ index: number; total: number; name: string } | null>(null);
+  const [drag, setDrag] = useState(false);
   const [folder, setFolder] = useState<number | null | "none">(null);
   const [showCount, setShowCount] = useState(20);
   const toast = useToast();
@@ -1075,12 +1077,29 @@ function Videos({ videos, folders, groups, onChange }: {
   }, [videos, query, folder]);
   const visible = filtered.slice(0, showCount);
 
-  async function upload(f: File | null) {
-    if (!f) return;
-    setBusy(true); setProgress(0);
-    try { await api.uploadVideo(f, setProgress); onChange(); toast.add("success", "Видео загружено"); }
-    catch (e: any) { toast.add("error", e.message); }
-    finally { setBusy(false); setProgress(0); }
+  /** Заливает выбранную пачку по одному файлу за раз.
+
+   *  Последовательно, а не параллельно: ролики крупные и уходят кусками, а
+   *  несколько одновременных заливок только делят канал и чаще рвутся. Упавший
+   *  файл не останавливает остальные — в конце показываем сводку.
+   */
+  async function upload(files: FileList | File[] | null) {
+    const list = Array.from(files ?? []);
+    if (list.length === 0) return;
+    setBusy(true);
+    const failed: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      setQueue({ index: i + 1, total: list.length, name: list[i].name });
+      setProgress(0);
+      try { await api.uploadVideo(list[i], setProgress); }
+      catch (e: any) { failed.push(`${list[i].name}: ${e.message}`); }
+    }
+    setBusy(false); setProgress(0); setQueue(null);
+    onChange();
+
+    const ok = list.length - failed.length;
+    if (ok) toast.add("success", list.length === 1 ? "Видео загружено" : `Загружено видео: ${ok} из ${list.length}`);
+    if (failed.length) toast.add("error", "Не загрузились — " + failed.join("; "));
   }
 
   /** Удаление ролика, на который есть задачи, требует отдельного подтверждения:
@@ -1104,18 +1123,23 @@ function Videos({ videos, folders, groups, onChange }: {
   return (
     <div>
       <div className="vp-card">
-        <label className="vp-dropzone">
-          <input type="file" accept="video/*" hidden disabled={busy} onChange={(e) => upload(e.target.files?.[0] ?? null)} />
+        <label className={`vp-dropzone${drag ? " dragover" : ""}`}
+               onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+               onDragLeave={() => setDrag(false)}
+               onDrop={(e) => { e.preventDefault(); setDrag(false); if (!busy) upload(e.dataTransfer.files); }}>
+          <input type="file" accept="video/*" multiple hidden disabled={busy}
+                 onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
           {busy ? (
             <>
               <span className="spinner-border spinner-border-sm me-2" />
-              Загрузка… {progress}%
+              {queue && queue.total > 1 ? `Файл ${queue.index} из ${queue.total}: ` : "Загрузка… "}{progress}%
               <div className="progress mt-2" style={{ height: 6, width: 220 }}>
                 <div className="progress-bar" style={{ width: `${progress}%` }} />
               </div>
-              <small className="text-muted mt-1">Большой файл заливается несколько минут — не закрывайте вкладку.</small>
+              {queue && <small className="text-muted mt-1 text-truncate" style={{ maxWidth: 260 }}>{queue.name}</small>}
+              <small className="text-muted">Большой файл заливается несколько минут — не закрывайте вкладку.</small>
             </>
-          ) : <><i className="bi bi-cloud-arrow-up me-2" /><span>Загрузить видео</span><br /><small className="text-muted">MP4, MOV, WebM — размер не ограничен</small></>}
+          ) : <><i className="bi bi-cloud-arrow-up me-2" /><span>Загрузить видео</span><br /><small className="text-muted">MP4, MOV, WebM — можно выбрать сразу несколько или перетащить сюда</small></>}
         </label>
       </div>
       <FoldersCard kind="video" title="Папки видео" folders={folders} groups={groups} onChange={onChange} />
@@ -1165,10 +1189,20 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
   }, [banners, query]);
   const visible = filtered.slice(0, showCount);
 
-  async function upload(f: File | null) {
-    if (!f) return;
-    try { await api.uploadBanner(f, name || f.name); setName(""); onChange(); toast.add("success", "Баннер загружен"); }
-    catch (e: any) { toast.add("error", e.message); }
+  /** Пачкой: заданное имя применяется только к первому файлу, остальные берут
+   *  имя своего файла — иначе в библиотеке появилось бы несколько одинаковых. */
+  async function upload(files: FileList | File[] | null) {
+    const list = Array.from(files ?? []);
+    if (list.length === 0) return;
+    const failed: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      try { await api.uploadBanner(list[i], (i === 0 && name) || list[i].name); }
+      catch (e: any) { failed.push(`${list[i].name}: ${e.message}`); }
+    }
+    setName(""); onChange();
+    const ok = list.length - failed.length;
+    if (ok) toast.add("success", list.length === 1 ? "Баннер загружен" : `Загружено баннеров: ${ok} из ${list.length}`);
+    if (failed.length) toast.add("error", "Не загрузились — " + failed.join("; "));
   }
 
   return (
@@ -1183,8 +1217,9 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
             <label className="form-label vp">Файл</label>
             <div>
               <label className="btn btn-vp mb-0" style={{ cursor: "pointer" }}>
-                <i className="bi bi-upload me-1" /> Загрузить (PNG/GIF/видео)
-                <input type="file" accept="image/*,video/*,.gif" hidden onChange={(e) => upload(e.target.files?.[0] ?? null)} />
+                <i className="bi bi-upload me-1" /> Загрузить (PNG/GIF/видео, можно несколько)
+                <input type="file" accept="image/*,video/*,.gif" multiple hidden
+                       onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
               </label>
             </div>
           </div>

@@ -444,11 +444,20 @@ function MediaLibrary({ title, icon, hint, accept, items, upload, remove, fileUr
         </div>
         <label className="btn btn-vp mb-0" style={{ cursor: "pointer" }}>
           {busy ? <><span className="spinner-border spinner-border-sm me-2" />Загрузка…</> : <><i className="bi bi-upload me-1" />Загрузить</>}
-          <input type="file" accept={accept} hidden disabled={busy} onChange={async (e) => {
-            const f = e.target.files?.[0]; if (!f) return;
+          {/* Можно выбрать сразу несколько файлов: заданное имя достаётся первому,
+              остальные называются по имени своего файла. */}
+          <input type="file" accept={accept} multiple hidden disabled={busy} onChange={async (e) => {
+            const list = Array.from(e.target.files ?? []);
+            e.target.value = "";
+            if (list.length === 0) return;
             setBusy(true); setErr(null);
-            try { await upload(f, name || f.name); setName(""); await onChange(); }
-            catch (x: any) { setErr(x.message); } finally { setBusy(false); }
+            const failed: string[] = [];
+            for (let i = 0; i < list.length; i++) {
+              try { await upload(list[i], (i === 0 && name) || list[i].name); }
+              catch (x: any) { failed.push(`${list[i].name}: ${x.message}`); }
+            }
+            setName(""); await onChange(); setBusy(false);
+            if (failed.length) setErr("Не загрузились — " + failed.join("; "));
           }} />
         </label>
         <span className="fs-sm text-muted">{hint}</span>

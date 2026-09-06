@@ -32,11 +32,45 @@ FILE_INPUT = 'input[type="file"]'
 CAPTION_EDITOR = 'div[contenteditable="true"], .public-DraftEditor-content'
 POST_BUTTON = 'button[data-e2e="post_video_button"], button:has-text("Post")'
 
-# Тумблер «Загружать в HD» в TikTok Studio. Название плавает и локализовано,
-# поэтому ищем по подстрокам рядом с переключателем, а не по селектору.
-HD_HINTS = ("hd", "высоко", "качеств", "high quality", "high-quality")
-# Раздел, под которым тумблер обычно спрятан
-MORE_SETTINGS_LABELS = ("Больше настроек", "Показать больше", "More settings", "Show more")
+# Тумблер «Загружать в высоком качестве» в TikTok Studio. Название локализовано и
+# меняется, поэтому ищем по фразам рядом с переключателем, а не по селектору.
+# Фразы намеренно длинные: короткое «hd» ловится и в чужих подписях, и можно было
+# случайно щёлкнуть не тот тумблер (например, «Разрешить дуэты»).
+HD_HINTS = (
+    "высоком качестве", "высокого качества", "высококачествен",
+    "high quality", "high-quality", "hd video", "upload hd", "загружать в hd",
+)
+# Поиск и включение тумблера прямо в странице. Кликаем из DOM, потому что клики
+# Playwright перехватывают оверлеи TikTok (та же причина, что и в _kill_overlays),
+# и обязательно перечитываем состояние: у React-компонентов клик по обёртке
+# иногда не доходит до самого переключателя.
+HD_TOGGLE_JS = """(hints) => {
+        const isOn = (el) => el.getAttribute('aria-checked') === 'true'
+            || el.checked === true
+            || /checked|active|-on/i.test(el.className || '');
+        const nodes = document.querySelectorAll(
+            '[role=switch], input[type=checkbox], [class*=witch]');
+        for (const el of nodes) {
+            let ctx = '', p = el;
+            for (let i = 0; i < 4 && p; i++, p = p.parentElement) ctx += ' ' + (p.innerText || '');
+            ctx = ctx.toLowerCase();
+            if (!hints.some((h) => ctx.includes(h))) continue;
+            if (isOn(el)) return 'already';
+            (el.closest('label') || el).click();
+            // Проверяем, что тумблер реально переключился: у React-компонентов
+            // клик по обёртке иногда не доходит до состояния.
+            if (!isOn(el)) el.click();
+            return isOn(el) ? 'enabled' : 'unchanged';
+        }
+        return 'not_found';
+    }"""
+
+# Раздел, под которым тумблер спрятан. «Дополнительно» — то, как он называется
+# в текущем интерфейсе; остальные варианты оставлены на случай другой локали.
+MORE_SETTINGS_LABELS = (
+    "Дополнительно", "Дополнительные настройки", "Показать больше", "Больше настроек",
+    "Advanced settings", "Advanced", "More settings", "Show more",
+)
 
 # Ответы этих эндпоинтов = реальное подтверждение публикации. Только по ним
 # считаем задачу успешной: клик по кнопке сам по себе ничего не доказывает.
@@ -146,17 +180,21 @@ def upload_tiktok(
                 except Exception as e:  # noqa: BLE001
                     _log(f"Не удалось ввести описание автоматически: {e}")
 
-            hd = _enable_hd(page, log=_log)
-            _log({
-                "enabled": "Включил загрузку в HD.",
-                "already": "Загрузка в HD уже включена.",
-                "not_found": "Тумблер HD не найден — TikTok его не показывает для этого аккаунта.",
-            }.get(hd, "Тумблер HD проверить не удалось."))
-
             # Ждём РЕАЛЬНОГО завершения заливки, а не фиксированные 10 секунд:
             # через прокси большое видео льётся минутами, и клик по неактивной
             # кнопке «Опубликовать» раньше молча ничего не делал.
             _wait_upload_complete(page, log=_log, timeout_ms=MAX_UPLOAD_WAIT_MS, watch=watch)
+
+            # Раздел «Дополнительно» с настройками появляется, когда форма
+            # полностью отрисована, — поэтому проверяем качество после заливки.
+            hd = _enable_hd(page, log=_log)
+            _log({
+                "enabled": "Включил «Загружать в высоком качестве».",
+                "already": "«Загружать в высоком качестве» уже включено.",
+                "unchanged": "Нашёл настройку качества, но переключить её не удалось.",
+                "not_found": "Настройка «Загружать в высоком качестве» не найдена — "
+                             "TikTok не показывает её для этого аккаунта.",
+            }.get(hd, "Настройку качества проверить не удалось."))
 
             _log("Публикую…")
             # На случай, если диалог/обучающий оверлей появился/вернулся — убираем перед кликом.
@@ -506,49 +544,53 @@ def _confirm_publish_modal(page, log=lambda m: None) -> bool:
 
 
 def _enable_hd(page, log=lambda m: None) -> str:
-    """Включает загрузку в HD, если TikTok показывает такой переключатель.
+    """Включает «Загружать в высоком качестве» в разделе «Дополнительно».
 
-    Без него веб-загрузчик отдаёт ролик в пониженном качестве — это и есть «режим
-    высокого качества при заливе», которого раньше в панели не было вовсе.
-    Тумблер живёт в «Больше настроек», называется по-разному и в части аккаунтов
-    отсутствует — поэтому ищем по тексту и НИКОГДА не роняем задачу: не нашли —
-    пишем в лог и продолжаем.
+    Без этой галочки веб-загрузчик TikTok отдаёт ролик в пониженном качестве —
+    сколько ни улучшай рендер, зритель увидит мыло. Раздел свёрнут, называется
+    по-разному и в части аккаунтов отсутствует, поэтому ищем по тексту рядом с
+    переключателем и НИКОГДА не роняем задачу: не нашли — пишем в лог и идём дальше.
+
+    Возвращает: enabled | already | unchanged | not_found | error.
     """
     from playwright.sync_api import Error as PWError
 
+
+    def _try() -> str:
+        """Одна попытка; 'unchanged' повторяем — переключатель мог не успеть ожить.
+
+        Такое видно на только что вставленном в DOM разделе: текст уже на месте,
+        а обработчик клика ещё не привязан, и состояние не меняется.
+        """
+        for attempt in range(3):
+            res = page.evaluate(HD_TOGGLE_JS, list(HD_HINTS))
+            if res != "unchanged":
+                return res
+            page.wait_for_timeout(500)
+        return "unchanged"
+
     try:
-        for label in MORE_SETTINGS_LABELS:          # раскрываем свёрнутый раздел
+        result = _try()
+        if result != "not_found":
+            return result
+
+        # Не нашли на виду — раскрываем «Дополнительно» и смотрим снова.
+        for label in MORE_SETTINGS_LABELS:
             try:
-                more = page.locator(f'text="{label}"').first
-                if more.count() > 0 and more.is_visible():
-                    more.click(timeout=2_000, no_wait_after=True)
-                    page.wait_for_timeout(500)
-                    break
+                more = page.get_by_text(label, exact=False).first
+                if more.count() == 0 or not more.is_visible():
+                    continue
+                more.click(timeout=2_000, no_wait_after=True)
+                page.wait_for_timeout(700)
+                result = _try()
+                if result != "not_found":
+                    log(f"Раскрыл раздел «{label}».")
+                    return result
             except PWError:
                 continue
-
-        return page.evaluate(
-            """(hints) => {
-                const isOn = (el) => el.getAttribute('aria-checked') === 'true'
-                    || el.checked === true
-                    || /checked|active|-on/i.test(el.className || '');
-                const nodes = document.querySelectorAll(
-                    '[role=switch], input[type=checkbox], [class*=witch]');
-                for (const el of nodes) {
-                    let ctx = '', p = el;
-                    for (let i = 0; i < 4 && p; i++, p = p.parentElement) ctx += ' ' + (p.innerText || '');
-                    ctx = ctx.toLowerCase();
-                    if (!hints.some((h) => ctx.includes(h))) continue;
-                    if (isOn(el)) return 'already';
-                    (el.closest('label') || el).click();
-                    return 'enabled';
-                }
-                return 'not_found';
-            }""",
-            list(HD_HINTS),
-        )
+        return "not_found"
     except PWError as e:
-        log(f"Не удалось проверить тумблер HD: {e}")
+        log(f"Не удалось проверить настройку качества: {e}")
         return "error"
 
 

@@ -37,8 +37,10 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "rotate": {"on": True, "deg": [1, 3], "flip180": False},
     "color": {"on": True, "presets": list(COLOR_PRESETS)},
     "noise": {"on": False, "strength": [1, 3]},
+    # fps=0 означает «как в исходнике»: принудительные 30 выбрасывали каждый второй
+    # кадр у 60-кадровых роликов, и результат выглядел дёрганым.
     "canvas": {"on": True, "w": 1080, "h": 1920, "border_px": [10, 20], "bg": "blur",
-               "color": "#000000", "bg_asset_id": None, "bg_random": True},
+               "color": "#000000", "bg_asset_id": None, "bg_random": True, "fps": 0},
     "overlay": {"on": False, "asset_id": None, "random": True, "opacity": [0.05, 0.20]},
     "hook": {"on": False, "asset_id": None, "random": True},
     "ad": {"on": False, "asset_id": None, "random": True},
@@ -117,11 +119,29 @@ class UniqPlan:
     overlay_opacity: float = 0.0
     metadata: bool = True
     fps: int = 30
+    # Размер выходного кадра. При включённом холсте это сам холст; при выключенном —
+    # размер основного видео, чтобы не перегонять горизонтальный ролик в 1080×1920.
+    out_w: int = 0
+    out_h: int = 0
     extra: dict = field(default_factory=dict)
 
 
+def _pick_fps(profile_fps, source_fps: float | None) -> int:
+    """Частота кадров результата: из профиля, иначе исходная.
+
+    Потолок 60 — выше TikTok всё равно не принимает; пол 12 страхует от битого
+    ffprobe, который иногда отдаёт 0.
+    """
+    if profile_fps:
+        return max(1, int(profile_fps))
+    if source_fps and source_fps > 0:
+        return max(12, min(60, round(source_fps)))
+    return 30
+
+
 def roll(params: dict, *, duration: float, rnd: random.Random,
-         with_hook: bool = False, hook_duration: float = 0.0) -> UniqPlan:
+         with_hook: bool = False, hook_duration: float = 0.0,
+         source_fps: float | None = None) -> UniqPlan:
     """Диапазоны → конкретные значения.
 
     Авторежим и ручной — одно и то же: «вручную» означает равные границы
@@ -201,6 +221,7 @@ def roll(params: dict, *, duration: float, rnd: random.Random,
         canvas_color=str(canvas.get("color") or "#000000"),
         overlay_opacity=opacity,
         metadata=bool((p.get("metadata") or {}).get("on", True)),
+        fps=_pick_fps(canvas.get("fps"), source_fps),
     )
 
 
@@ -263,10 +284,15 @@ def segment_chain(plan: SegmentPlan, canvas: UniqPlan, src: str, out: str,
     if canvas.canvas_on:
         chains.extend(_canvas_chain(plan, canvas, cur, out, bg_src))
     else:
-        # без холста всё равно нормализуем — concat не терпит разных размеров
+        # Без холста тоже нормализуем (concat не терпит разных размеров), но по
+        # размеру ОСНОВНОГО видео, а не по константе 1080×1920: иначе выключенный
+        # холст всё равно перегонял горизонтальный ролик в вертикальный кадр с
+        # полями, и картинка теряла больше половины пикселей.
+        w = canvas.out_w or canvas.canvas_w
+        h = canvas.out_h or canvas.canvas_h
         chains.append(
-            f"{cur}scale={canvas.canvas_w}:{canvas.canvas_h}:force_original_aspect_ratio=decrease,"
-            f"pad={canvas.canvas_w}:{canvas.canvas_h}:(ow-iw)/2:(oh-ih)/2:{_norm_color(canvas.canvas_color)},"
+            f"{cur}scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:{_norm_color(canvas.canvas_color)},"
             f"setsar=1,fps={canvas.fps}{out}"
         )
     return chains
@@ -514,7 +540,13 @@ def render(
         rnd=rnd,
         with_hook=hook_info is not None,
         hook_duration=hook_info.duration if hook_info else 0.0,
+        source_fps=info.fps,
     )
+    # Выход без холста повторяет размер основного видео (чётные стороны — требование
+    # yuv420p); с холстом размер задаёт сам холст.
+    if not plan.canvas_on:
+        plan.out_w = max(2, (info.width or plan.canvas_w) // 2 * 2)
+        plan.out_h = max(2, (info.height or plan.canvas_h) // 2 * 2)
 
     segments: list[SegmentInput] = []
     if hook_info and plan.hook:
@@ -557,7 +589,7 @@ def render(
         background=background,
         background_is_video=background_is_video,
         editor_overlays=editor_overlays,
-        encode_args=media._encode_args(),
+        encode_args=media._encode_args(plan.fps),
         metadata_args=media._uniq_metadata_args(),
         layers_builder=media.build_layers_chain,
     )

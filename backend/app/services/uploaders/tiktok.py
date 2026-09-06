@@ -32,6 +32,12 @@ FILE_INPUT = 'input[type="file"]'
 CAPTION_EDITOR = 'div[contenteditable="true"], .public-DraftEditor-content'
 POST_BUTTON = 'button[data-e2e="post_video_button"], button:has-text("Post")'
 
+# Тумблер «Загружать в HD» в TikTok Studio. Название плавает и локализовано,
+# поэтому ищем по подстрокам рядом с переключателем, а не по селектору.
+HD_HINTS = ("hd", "высоко", "качеств", "high quality", "high-quality")
+# Раздел, под которым тумблер обычно спрятан
+MORE_SETTINGS_LABELS = ("Больше настроек", "Показать больше", "More settings", "Show more")
+
 # Ответы этих эндпоинтов = реальное подтверждение публикации. Только по ним
 # считаем задачу успешной: клик по кнопке сам по себе ничего не доказывает.
 PUBLISH_API_HINTS = ("/aweme/v1/web/aweme/post", "/project/post", "/web/project/publish", "/upload/publish")
@@ -139,6 +145,13 @@ def upload_tiktok(
                     editor.type(caption, delay=15)
                 except Exception as e:  # noqa: BLE001
                     _log(f"Не удалось ввести описание автоматически: {e}")
+
+            hd = _enable_hd(page, log=_log)
+            _log({
+                "enabled": "Включил загрузку в HD.",
+                "already": "Загрузка в HD уже включена.",
+                "not_found": "Тумблер HD не найден — TikTok его не показывает для этого аккаунта.",
+            }.get(hd, "Тумблер HD проверить не удалось."))
 
             # Ждём РЕАЛЬНОГО завершения заливки, а не фиксированные 10 секунд:
             # через прокси большое видео льётся минутами, и клик по неактивной
@@ -490,6 +503,53 @@ def _confirm_publish_modal(page, log=lambda m: None) -> bool:
     log(f"TikTok переспросил «Продолжить публикацию?» — подтвердил кнопкой «{res.get('label')}».")
     page.wait_for_timeout(1_500)
     return True
+
+
+def _enable_hd(page, log=lambda m: None) -> str:
+    """Включает загрузку в HD, если TikTok показывает такой переключатель.
+
+    Без него веб-загрузчик отдаёт ролик в пониженном качестве — это и есть «режим
+    высокого качества при заливе», которого раньше в панели не было вовсе.
+    Тумблер живёт в «Больше настроек», называется по-разному и в части аккаунтов
+    отсутствует — поэтому ищем по тексту и НИКОГДА не роняем задачу: не нашли —
+    пишем в лог и продолжаем.
+    """
+    from playwright.sync_api import Error as PWError
+
+    try:
+        for label in MORE_SETTINGS_LABELS:          # раскрываем свёрнутый раздел
+            try:
+                more = page.locator(f'text="{label}"').first
+                if more.count() > 0 and more.is_visible():
+                    more.click(timeout=2_000, no_wait_after=True)
+                    page.wait_for_timeout(500)
+                    break
+            except PWError:
+                continue
+
+        return page.evaluate(
+            """(hints) => {
+                const isOn = (el) => el.getAttribute('aria-checked') === 'true'
+                    || el.checked === true
+                    || /checked|active|-on/i.test(el.className || '');
+                const nodes = document.querySelectorAll(
+                    '[role=switch], input[type=checkbox], [class*=witch]');
+                for (const el of nodes) {
+                    let ctx = '', p = el;
+                    for (let i = 0; i < 4 && p; i++, p = p.parentElement) ctx += ' ' + (p.innerText || '');
+                    ctx = ctx.toLowerCase();
+                    if (!hints.some((h) => ctx.includes(h))) continue;
+                    if (isOn(el)) return 'already';
+                    (el.closest('label') || el).click();
+                    return 'enabled';
+                }
+                return 'not_found';
+            }""",
+            list(HD_HINTS),
+        )
+    except PWError as e:
+        log(f"Не удалось проверить тумблер HD: {e}")
+        return "error"
 
 
 def _dismiss_blocking_modal(page, log=lambda m: None, timeout_ms: int = 10_000) -> bool:

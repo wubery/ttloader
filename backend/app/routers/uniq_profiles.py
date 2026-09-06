@@ -113,10 +113,13 @@ def preview_profile(profile_id: int, video_id: int, db: Session = Depends(get_db
     cut = os.path.join(settings.output_dir, f"preview_cut_{profile_id}.mp4")
     out = os.path.join(settings.output_dir, f"preview_{profile_id}_{int(time.time())}.mp4")
     try:
-        # сначала короткий отрывок, потом уже конвейер — так предпросмотр занимает секунды
+        # Сначала короткий отрывок, потом уже конвейер — так предпросмотр занимает
+        # секунды. Режем БЕЗ перекодирования (-c copy): раньше здесь стоял
+        # libx264 -preset veryfast, и предпросмотр всегда выглядел хуже реального
+        # рендера — качество оценивали по заведомо испорченной картинке.
         media._run([
             settings.ffmpeg_bin, "-y", "-v", "error", "-t", str(PREVIEW_SECONDS),
-            "-i", src, "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", cut,
+            "-i", src, "-c", "copy", "-avoid_negative_ts", "make_zero", cut,
         ], timeout=300)
         params = json.loads(row.params) if row.params else {}
         uniqueizer.render(video_path=cut, output_path=out, params=params)

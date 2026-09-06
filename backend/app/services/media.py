@@ -162,12 +162,20 @@ def _uniq_metadata_args() -> list[str]:
     ]
 
 
-def _encode_args() -> list[str]:
-    """Параметры кодирования; крутятся из .env, см. Settings.video_crf_min и соседей."""
+def _encode_args(fps: float | None = None) -> list[str]:
+    """Параметры кодирования; крутятся из .env, см. Settings.video_crf_min и соседей.
+
+    `fps` нужен только для длины GOP: ключевой кадр раз в две секунды. С длинным
+    GOP перекодировщик TikTok сильнее мажет быстрые сцены, а короткий стоит
+    считанные проценты размера.
+    """
     lo, hi = sorted((settings.video_crf_min, settings.video_crf_max))
+    gop = max(24, round((fps or 30) * 2))
     return [
         "-c:v", "libx264", "-preset", settings.video_preset,
         "-crf", str(random.randint(lo, hi)),
+        "-profile:v", "high", "-level", "4.2",
+        "-g", str(gop), "-keyint_min", str(max(12, gop // 2)),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", settings.audio_bitrate,
         "-movflags", "+faststart",
@@ -202,7 +210,7 @@ def render_with_banner(
     else:
         cmd += ["-i", banner_path]
     cmd += ["-filter_complex", filt, "-map", map_label, "-map", "0:a?"]
-    cmd += _encode_args()
+    cmd += _encode_args(info.fps)
     if uniqueize:
         cmd += _uniq_metadata_args()
     cmd += [output_path]
@@ -401,7 +409,7 @@ def render_with_overlays(
             cur = "[vout]"
 
         cmd += ["-filter_complex", ";".join(chains), "-map", cur, "-map", "0:a?"]
-        cmd += _encode_args()
+        cmd += _encode_args(info.fps)
         if uniqueize:
             cmd += _uniq_metadata_args()
         cmd += [output_path]
@@ -417,8 +425,12 @@ def render_with_overlays(
 
 def _copy_reencode(video_path: str, output_path: str) -> str:
     """Перекодирование без изменений (когда слоёв нет и уникализация отключена)."""
+    try:
+        fps = probe(video_path).fps
+    except MediaError:
+        fps = None
     cmd = [settings.ffmpeg_bin, "-y", "-i", video_path, "-map", "0:v:0", "-map", "0:a?"]
-    cmd += _encode_args() + [output_path]
+    cmd += _encode_args(fps) + [output_path]
     _run(cmd)
     return output_path
 
@@ -428,7 +440,7 @@ def render_uniqueize(video_path: str, output_path: str) -> str:
     info = probe(video_path)
     cmd = [settings.ffmpeg_bin, "-y", "-i", video_path, "-vf", _uniq_vf(info.width, info.height)]
     cmd += ["-map", "0:v:0", "-map", "0:a?"]
-    cmd += _encode_args()
+    cmd += _encode_args(info.fps)
     cmd += _uniq_metadata_args()
     cmd += [output_path]
     _run(cmd)

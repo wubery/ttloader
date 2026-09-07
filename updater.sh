@@ -166,13 +166,18 @@ while true; do
     if [ "$pull_rc" -eq 0 ]; then
       set_status "Пересборка контейнеров…"
       # Прошиваем хеш в образ, чтобы панель могла отличить «git подтянулся» от
-      # «контейнер реально пересобран этим кодом».
+      # «контейнер реально пересобран этим кодом». Аргумент передаём ЯВНО в
+      # `build`, а не только через ${VP_COMMIT} в compose: подстановка молча даёт
+      # «unknown», если апдейтер в памяти остался старым, и понять это по логу
+      # было нельзя. Поэтому же пишем значение в журнал.
       export VP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+      echo "updater: сборка с VP_COMMIT=$VP_COMMIT" >> update/updater.log
       # ${CF[@]+…} — чтобы пустой массив не спотыкался о set -u на старом bash
-      if $DC ${CF[@]+"${CF[@]}"} up -d --build >> update/updater.log 2>&1; then
+      if $DC ${CF[@]+"${CF[@]}"} build --build-arg VP_COMMIT="$VP_COMMIT" >> update/updater.log 2>&1          && $DC ${CF[@]+"${CF[@]}"} up -d >> update/updater.log 2>&1; then
         write_version
         set_status "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')"
         if [ -n "$SELF_SUM" ] && [ "$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)" != "$SELF_SUM" ]; then
+          echo "updater: обновился сам, перезапускаюсь" >> update/updater.log
           exec /usr/bin/env bash "$0"   # апдейтер обновил сам себя
         fi
       else

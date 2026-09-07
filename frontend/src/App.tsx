@@ -2148,6 +2148,7 @@ function Settings() {
   }, []);
 
   // приватный репозиторий без токена — сразу открываем поле для токена
+  const [upLog, setUpLog] = useState<string[] | null>(null);
   useEffect(() => { if (ver?.git_status === "auth_required") setGitOpen(true); }, [ver?.git_status]);
 
   async function doUpdate() {
@@ -2320,6 +2321,21 @@ function Settings() {
           {ver?.git_status === "no_git" && <span className="badge-vp badge-vp-muted">установлено не из git — обновление недоступно</span>}
         </div>
         {ver?.update_status && <p className="fs-sm text-muted mt-2 mb-0">Статус: {ver.update_status}</p>}
+        <div className="mt-2">
+          <button className="btn btn-link btn-sm p-0 fs-sm" onClick={async () => {
+            if (upLog) { setUpLog(null); return; }
+            try { const r = await api.updateLog(80); setUpLog(r.lines.length ? r.lines : [r.detail]); }
+            catch (e: any) { setUpLog([e.message]); }
+          }}>
+            <i className="bi bi-journal-text me-1" />{upLog ? "Скрыть журнал обновления" : "Журнал обновления"}
+          </button>
+          {upLog && (
+            <pre className="mt-2 p-2 fs-sm" style={{
+              maxHeight: 260, overflow: "auto", background: "var(--vp-bg2)",
+              border: "1px solid var(--vp-border)", borderRadius: 8, whiteSpace: "pre-wrap",
+            }}>{upLog.join(String.fromCharCode(10))}</pre>
+          )}
+        </div>
 
         {ver?.git_status !== "no_git" && (
           <div className="mt-3 pt-3 border-top border-vp">

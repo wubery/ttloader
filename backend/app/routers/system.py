@@ -81,6 +81,27 @@ class GitTokenIn(BaseModel):
     token: str
 
 
+@router.get("/update-log")
+def update_log(lines: int = 80):
+    """Последние строки журнала апдейтера.
+
+    Без него «обновление не применилось» отлаживается только по ssh: статус в
+    панели — одна строка, а причина (что подтянул git, пересобрался ли образ)
+    видна лишь в логе на хосте.
+    """
+    path = os.path.join(UPDATE_DIR, "updater.log")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            tail = f.readlines()[-max(1, min(lines, 500)):]
+    except OSError:
+        return {"lines": [], "detail": "Журнал недоступен — апдейтер ещё не запускался"}
+    # Токен в лог не пишется, но подстраховываемся: файл отдаётся в браузер
+    safe = [ln.rstrip("
+") for ln in tail
+            if "x-access-token" not in ln and "ghp_" not in ln]
+    return {"lines": safe, "detail": ""}
+
+
 @router.post("/git-token")
 def set_git_token(payload: GitTokenIn):
     """Передаёт токен GitHub хостовому апдейтеру (для приватного репозитория).

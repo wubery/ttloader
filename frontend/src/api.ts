@@ -413,6 +413,9 @@ export const api = {
   // system
   systemVersion: () => fetch("/api/system/version").then((r) => j<SystemVersion>(r)),
   systemUpdate: () => fetch("/api/system/update", { method: "POST" }).then((r) => j<any>(r)),
+  updateLog: (lines = 80) =>
+    fetch(`/api/system/update-log?lines=${lines}`)
+      .then((r) => j<{ lines: string[]; detail: string }>(r)),
   systemGitToken: (token: string) =>
     fetch("/api/system/git-token", {
       method: "POST", headers: { "Content-Type": "application/json" },

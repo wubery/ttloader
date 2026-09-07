@@ -6,6 +6,7 @@ import {
 } from "./api";
 import { BannerEditor } from "./BannerEditor";
 import { FolderPicker, FolderTabs, FoldersCard, visibleToGroup } from "./Folders";
+import { Activity } from "./Activity";
 import { Uniqueizer } from "./Uniqueizer";
 
 /* ================================================================
@@ -112,7 +113,7 @@ function useConfirm() { return useContext(ConfirmCtx); }
 /* ================================================================
    Tab type
    ================================================================ */
-type Tab = "jobs" | "post" | "editor" | "accounts" | "videos" | "banners" | "uniq" | "proxy" | "stats" | "settings";
+type Tab = "jobs" | "post" | "editor" | "accounts" | "videos" | "banners" | "uniq" | "activity" | "proxy" | "stats" | "settings";
 
 const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
   { tab: "jobs", icon: "bi-clipboard2-data", label: "Очередь" },
@@ -122,6 +123,7 @@ const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
   { tab: "videos", icon: "bi-play-circle", label: "Видео" },
   { tab: "banners", icon: "bi-image", label: "Баннеры" },
   { tab: "uniq", icon: "bi-shuffle", label: "Уникализация" },
+  { tab: "activity", icon: "bi-activity", label: "Активность" },
   { tab: "proxy", icon: "bi-shield-check", label: "Прокси" },
   { tab: "stats", icon: "bi-bar-chart-line", label: "Статистика" },
   { tab: "settings", icon: "bi-gear", label: "Настройки" },
@@ -129,6 +131,7 @@ const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
 
 const TAB_LABELS: Record<Tab, string> = {
   jobs: "Очередь", post: "Новый пост", editor: "Редактор", accounts: "Аккаунты",
+  activity: "Активность",
   videos: "Видео", banners: "Баннеры", uniq: "Уникализация",
   proxy: "Прокси", stats: "Статистика", settings: "Настройки",
 };
@@ -368,6 +371,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             {tab === "videos" && <Videos videos={videos} folders={videoFolders} groups={groups} onChange={refreshAll} />}
             {tab === "banners" && <Banners banners={banners} onChange={refreshAll} />}
             {tab === "uniq" && <Uniqueizer videos={videos} onChange={refreshAll} />}
+            {tab === "activity" && <Activity accounts={accounts} onChange={refreshAll} />}
             {tab === "proxy" && <ProxyManager accounts={accounts} onChange={refreshAll} />}
             {tab === "stats" && <Stats jobs={jobs} accounts={accounts} videos={videos} groups={groups} />}
             {tab === "settings" && <Settings />}

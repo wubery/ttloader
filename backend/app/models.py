@@ -26,6 +26,27 @@ class AppSettings(Base):
     # Azure-приложение для чтения outlook/hotmail: один client_id на все ящики
     ms_client_id: Mapped[str | None] = mapped_column(String(120), default=None)
 
+    # --- Проверка активности (правится на вкладке «Активность») ------------------
+    # Всё диапазонами: ровное расписание у десятка аккаунтов выглядит как ферма.
+    activity_enabled: Mapped[bool] = mapped_column(default=True, server_default="1")
+    activity_per_day_min: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    activity_per_day_max: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
+    activity_seconds_min: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
+    activity_seconds_max: Mapped[int] = mapped_column(Integer, default=180, server_default="180")
+    # Окно суток: ночью живой человек ленту не листает
+    activity_hour_from: Mapped[int] = mapped_column(Integer, default=9, server_default="9")
+    activity_hour_to: Mapped[int] = mapped_column(Integer, default=23, server_default="23")
+
+    likes_enabled: Mapped[bool] = mapped_column(default=True, server_default="1")
+    likes_per_run_min: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    likes_per_run_max: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    likes_interval_min: Mapped[int] = mapped_column(Integer, default=45, server_default="45")
+    likes_interval_max: Mapped[int] = mapped_column(Integer, default=180, server_default="180")
+    # Одного и того же адресата один аккаунт лайкает не чаще, чем раз в столько часов
+    like_cooldown_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
+    activity_max_concurrent: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    next_likes_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
 
 class Platform(str, enum.Enum):
     tiktok = "tiktok"
@@ -101,6 +122,17 @@ class Account(Base):
     mail_imap_port: Mapped[int | None] = mapped_column(Integer, default=None)
     mail_refresh_token_enc: Mapped[str | None] = mapped_column(Text, default=None)
     mail_connected_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # --- Проверка активности ---------------------------------------------------
+    # Публичный ник без «@». Нужен, чтобы отличить свои посты от чужих: лайкать
+    # разрешено только аккаунты этой панели, и сверка идёт именно по нику.
+    tiktok_handle: Mapped[str | None] = mapped_column(String(64), default=None)
+    activity_on: Mapped[bool] = mapped_column(default=True, server_default="1")
+    likes_on: Mapped[bool] = mapped_column(default=True, server_default="1")
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Когда аккаунт в следующий раз пойдёт смотреть ленту. Разыгрывается случайно
+    # из диапазонов настроек — расписание не должно быть ровным.
+    next_activity_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
     # Участвует ли аккаунт в автоперелогине при протухших куках
     auto_login: Mapped[bool] = mapped_column(default=True, server_default="1")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
@@ -155,6 +187,25 @@ class AssetFolder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     groups: Mapped[list[AccountGroup]] = relationship(secondary=folder_groups, lazy="selectin")
+
+
+class ActivityRun(Base):
+    """Запись журнала активности: просмотр ленты или лайк чужого поста панели.
+
+    Нужна не только для отчёта в интерфейсе: по ней же считается кулдаун
+    «одного адресата не чаще раза в сутки».
+    """
+
+    __tablename__ = "activity_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    kind: Mapped[str] = mapped_column(String(16))                 # browse | like
+    target_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id"), default=None)                  # кого лайкали
+    status: Mapped[str] = mapped_column(String(16))               # ok | error | skipped
+    detail: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Video(Base):

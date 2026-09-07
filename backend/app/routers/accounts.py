@@ -25,7 +25,7 @@ from ..schemas import (
     MailMessageOut,
     ProxyCheckOut,
 )
-from ..services import auto_login, mail
+from ..services import activity, auto_login, mail
 from ..services.crypto import encrypt
 from ..services.login_session import LOGIN_URLS, login_manager
 from ..services.uploaders.base import (
@@ -70,6 +70,28 @@ def _ensure_proxy_unique(db: Session, proxy_url: str, exclude_id: int | None = N
             f"Этот прокси уже привязан к аккаунту «{other.name}» (id={other.id}). "
             f"У каждого аккаунта должен быть свой прокси.",
         )
+
+
+def _apply_activity(acc: Account, payload) -> None:
+    """Участие в проверке активности и публичный ник.
+
+    Ник нормализуем и проверяем сразу: по нему строится белый список для лайков,
+    и мусор в этом списке означал бы лайк неизвестно чему.
+    """
+    # Зовётся и из создания аккаунта, где этих полей в схеме нет — поэтому getattr
+    if getattr(payload, "activity_on", None) is not None:
+        acc.activity_on = payload.activity_on
+    if getattr(payload, "likes_on", None) is not None:
+        acc.likes_on = payload.likes_on
+    if "tiktok_handle" in payload.model_fields_set:
+        raw = (payload.tiktok_handle or "").strip()
+        if not raw:
+            acc.tiktok_handle = None            # «» — снять ник
+        else:
+            handle = activity.parse_handle(raw)
+            if handle is None:
+                raise HTTPException(400, f"Не похоже на ник TikTok: {raw}")
+            acc.tiktok_handle = handle
 
 
 def _apply_group(db: Session, acc: Account, payload) -> None:
@@ -129,6 +151,7 @@ def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
     if payload.uniqueize is not None:
         acc.uniqueize = payload.uniqueize
     _apply_group(db, acc, payload)
+    _apply_activity(acc, payload)
     _apply_credentials(acc, payload)
     db.add(acc)
     db.commit()
@@ -161,6 +184,7 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
     if payload.uniqueize is not None:
         acc.uniqueize = payload.uniqueize
     _apply_group(db, acc, payload)
+    _apply_activity(acc, payload)
     _apply_credentials(acc, payload)
     db.commit()
     db.refresh(acc)
@@ -212,6 +236,26 @@ async def upload_cookies(account_id: int, file: UploadFile = File(...), db: Sess
     if acc.cookies_path and os.path.exists(acc.cookies_path):
         os.remove(acc.cookies_path)
     acc.cookies_path = path
+    db.commit()
+    db.refresh(acc)
+    return acc
+
+
+@router.post("/{account_id}/discover-handle", response_model=AccountOut)
+def discover_handle(account_id: int, db: Session = Depends(get_db)):
+    """Определяет публичный ник аккаунта — без него он не участвует в лайках."""
+    acc = db.get(Account, account_id)
+    if acc is None:
+        raise HTTPException(404, "Аккаунт не найден")
+    if not acc.has_cookies:
+        raise HTTPException(400, "Нет кук: ник определяется под самим аккаунтом")
+    try:
+        handle = activity.discover_handle(acc)
+    except Exception as e:  # noqa: BLE001 — наружу отдаём причину, а не пятисотку
+        raise HTTPException(502, f"Не удалось определить ник: {e}") from e
+    if not handle:
+        raise HTTPException(404, "Ссылку на профиль найти не удалось — впишите ник вручную")
+    acc.tiktok_handle = handle
     db.commit()
     db.refresh(acc)
     return acc

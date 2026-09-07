@@ -30,6 +30,44 @@ export interface Account {
   auto_login: boolean;
   last_login_at: string | null;
   login_error: string | null;
+  /** Публичный ник без «@»; без него аккаунт не участвует в лайках */
+  tiktok_handle: string | null;
+  activity_on: boolean;
+  likes_on: boolean;
+  last_activity_at: string | null;
+  next_activity_at: string | null;
+}
+
+/** Диапазоны проверки активности: аккаунты смотрят ленту и лайкают друг друга. */
+export interface ActivitySettings {
+  activity_enabled: boolean;
+  activity_per_day_min: number;
+  activity_per_day_max: number;
+  activity_seconds_min: number;
+  activity_seconds_max: number;
+  activity_hour_from: number;
+  activity_hour_to: number;
+  likes_enabled: boolean;
+  likes_per_run_min: number;
+  likes_per_run_max: number;
+  likes_interval_min: number;
+  likes_interval_max: number;
+  like_cooldown_hours: number;
+  activity_max_concurrent: number;
+  next_likes_at: string | null;
+}
+
+/** Событие журнала: просмотр ленты или лайк посту другого аккаунта панели. */
+export interface ActivityRun {
+  id: number;
+  account_id: number;
+  account_name: string | null;
+  kind: "browse" | "like";
+  target_account_id: number | null;
+  target_name: string | null;
+  status: "ok" | "error" | "skipped";
+  detail: string | null;
+  created_at: string;
 }
 
 /** Папка внутри библиотеки (видео / хуки / фоны).
@@ -390,7 +428,22 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Account>(r)),
-  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean; uniq_profile_id: number | null; group_id: number | null } & AccountCredentials>) =>
+  // активность
+  activitySettings: () => fetch("/api/activity/settings").then((r) => j<ActivitySettings>(r)),
+  saveActivitySettings: (b: Partial<ActivitySettings>) =>
+    fetch("/api/activity/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+    }).then((r) => j<ActivitySettings>(r)),
+  activityLog: (limit = 50) =>
+    fetch(`/api/activity/log?limit=${limit}`).then((r) => j<ActivityRun[]>(r)),
+  runActivity: (accountId: number) =>
+    fetch(`/api/activity/run/${accountId}`, { method: "POST" }).then((r) => j<any>(r)),
+  discoverHandle: (accountId: number) =>
+    fetch(`/api/accounts/${accountId}/discover-handle`, { method: "POST" }).then((r) => j<Account>(r)),
+
+  updateAccount: (id: number, b: Partial<{ name: string; proxy_url: string | null; active: boolean; uniqueize: boolean; uniq_profile_id: number | null; group_id: number | null;
+    tiktok_handle: string | null; activity_on: boolean; likes_on: boolean
+  } & AccountCredentials>) =>
     fetch(`/api/accounts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

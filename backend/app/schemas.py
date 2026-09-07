@@ -35,6 +35,11 @@ class AccountUpdate(BaseModel):
     proxy_url: str | None = None
     active: bool | None = None
     uniqueize: bool | None = None
+    # Проверка активности: «» у ника означает «снять», поэтому роутер смотрит
+    # на model_fields_set, а не на значение
+    tiktok_handle: str | None = None
+    activity_on: bool | None = None
+    likes_on: bool | None = None
     tt_login: str | None = None
     tt_password: str | None = None
     mail_address: str | None = None
@@ -62,6 +67,12 @@ class AccountOut(BaseModel):
     active: bool
     has_cookies: bool
     created_at: datetime
+    # Проверка активности
+    tiktok_handle: str | None = None
+    activity_on: bool = True
+    likes_on: bool = True
+    last_activity_at: datetime | None = None
+    next_activity_at: datetime | None = None
     # Автовход
     tt_login: str | None = None
     has_tt_credentials: bool = False
@@ -171,6 +182,61 @@ class SettingsUpdate(BaseModel):
     tg_login_enabled: bool | None = None
     new_password: str | None = None
     ms_client_id: str | None = None   # Azure-приложение для чтения outlook-почты
+
+
+# ---------- Активность ----------
+class ActivitySettingsOut(BaseModel):
+    """Диапазоны проверки активности. Всё «от–до»: ровное расписание у десятка
+    аккаунтов выглядит как ферма."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    activity_enabled: bool
+    activity_per_day_min: int
+    activity_per_day_max: int
+    activity_seconds_min: int
+    activity_seconds_max: int
+    activity_hour_from: int
+    activity_hour_to: int
+    likes_enabled: bool
+    likes_per_run_min: int
+    likes_per_run_max: int
+    likes_interval_min: int
+    likes_interval_max: int
+    like_cooldown_hours: int
+    activity_max_concurrent: int
+    next_likes_at: datetime | None = None
+
+
+class ActivitySettingsUpdate(BaseModel):
+    activity_enabled: bool | None = None
+    activity_per_day_min: int | None = None
+    activity_per_day_max: int | None = None
+    activity_seconds_min: int | None = None
+    activity_seconds_max: int | None = None
+    activity_hour_from: int | None = None
+    activity_hour_to: int | None = None
+    likes_enabled: bool | None = None
+    likes_per_run_min: int | None = None
+    likes_per_run_max: int | None = None
+    likes_interval_min: int | None = None
+    likes_interval_max: int | None = None
+    like_cooldown_hours: int | None = None
+    activity_max_concurrent: int | None = None
+
+
+class ActivityRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    account_id: int
+    account_name: str | None = None
+    kind: str
+    target_account_id: int | None = None
+    target_name: str | None = None
+    status: str
+    detail: str | None = None
+    created_at: datetime
 
 
 # ---------- Videos ----------

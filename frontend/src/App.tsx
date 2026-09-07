@@ -2320,6 +2320,18 @@ function Settings() {
           {ver?.git_status === "auth_required" && <span className="badge-vp badge-vp-warning"><i className="bi bi-lock me-1" />нужен токен GitHub</span>}
           {ver?.git_status === "no_git" && <span className="badge-vp badge-vp-muted">установлено не из git — обновление недоступно</span>}
         </div>
+        {/* Апдейтер — отдельный процесс на хосте. Если он не запущен, кнопка лишь
+            ставит флаг, и статус «Запрошено обновление…» висит бесконечно. */}
+        {ver && ver.updater_alive === false && (
+          <div className="alert alert-danger py-2 fs-sm mt-2 mb-0">
+            <i className="bi bi-exclamation-octagon me-1" />
+            Апдейтер на сервере не отвечает{ver.updater_seen == null
+              ? " (не запускался ни разу)"
+              : ` (молчит ${Math.round(ver.updater_seen / 60)} мин)`}
+            {" "}— обновление не начнётся. Запустите его на сервере:
+            <code className="ms-1">sudo systemctl restart vp-updater</code>
+          </div>
+        )}
         {ver?.update_status && <p className="fs-sm text-muted mt-2 mb-0">Статус: {ver.update_status}</p>}
         <div className="mt-2">
           <button className="btn btn-link btn-sm p-0 fs-sm" onClick={async () => {

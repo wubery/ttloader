@@ -198,3 +198,13 @@ def test_studio_is_tried_before_feed():
 
     src = inspect.getsource(act.discover_handle)
     assert src.index("STUDIO_URL") < src.index("FEED_URL")
+
+
+def test_version_flags_dead_updater(client):
+    """«Запрошено обновление…» не должно висеть молча: панель обязана сказать,
+    что хостовый апдейтер не отвечает."""
+    body = client.get("/api/system/version").json()
+    assert "updater_alive" in body and "updater_seen" in body
+    # в тестах апдейтера нет вовсе — значит и признаков жизни быть не должно
+    assert body["updater_alive"] is False
+    assert body["updater_seen"] is None

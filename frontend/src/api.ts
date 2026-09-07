@@ -342,6 +342,10 @@ export interface SystemVersion {
   behind?: number;
   /** отпечаток работающего апдейтера; пусто — процесс на хосте со старым кодом */
   updater_sum?: string;
+  /** сколько секунд назад апдейтер подавал признаки жизни (null — никогда) */
+  updater_seen?: number | null;
+  /** апдейтер на хосте отвечает; false — обновление не начнётся вовсе */
+  updater_alive?: boolean;
   update_status: string;
   update_requested: boolean;
   /** ok | auth_required (приватный репо без токена) | error | no_git | "" */

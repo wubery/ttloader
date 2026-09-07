@@ -25,6 +25,20 @@ def _read(name: str, default: str = "") -> str:
         return default
 
 
+def _mtime(name: str) -> float | None:
+    try:
+        return os.path.getmtime(os.path.join(UPDATE_DIR, name))
+    except OSError:
+        return None
+
+
+# Признак жизни хостового апдейтера. Файл status не годится: его пишет и сама
+# панель при нажатии кнопки, поэтому «Запрошено обновление…» висело сутками и
+# выглядело как работа, хотя подхватывать флаг было некому.
+UPDATER_HEARTBEAT_FILES = ("git_status", "updater_sum", "version")
+UPDATER_SILENCE_SECONDS = 600
+
+
 def _chown_to_dir_owner(path: str) -> None:
     """Отдать файл владельцу каталога /update.
 
@@ -59,6 +73,8 @@ def version():
     """
     on_disk = _read("version", "unknown")
     running = os.environ.get("VP_COMMIT", "unknown")
+    stamps = [t for t in (_mtime(n) for n in UPDATER_HEARTBEAT_FILES) if t]
+    seen_ago = round(time.time() - max(stamps)) if stamps else None
     try:
         behind = int(_read("behind", "0") or 0)
     except ValueError:
@@ -73,6 +89,10 @@ def version():
         # Отпечаток работающего апдейтера: пустой — значит процесс на хосте всё
         # ещё крутит старый код и правки в updater.sh до него не дошли
         "updater_sum": _read("updater_sum", ""),
+        # Сколько секунд назад апдейтер подавал признаки жизни (None — никогда).
+        # Без этого «Запрошено обновление…» висит вечно и молча.
+        "updater_seen": seen_ago,
+        "updater_alive": seen_ago is not None and seen_ago < UPDATER_SILENCE_SECONDS,
         "update_status": _read("status", ""),
         "update_requested": os.path.exists(os.path.join(UPDATE_DIR, "requested")),
         # ok | auth_required (приватный репо без токена) | error | no_git | "" (нет апдейтера)

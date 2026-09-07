@@ -23,6 +23,8 @@ VIDEO_PATH_RE = re.compile(r"^/@([A-Za-z0-9._]{1,64})/video/(\d+)/?$")
 TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com"}
 
 FEED_URL = "https://www.tiktok.com/foryou"
+# В студии профиль всегда свой — в ленте же полно чужих ссылок
+STUDIO_URL = "https://www.tiktok.com/tiktokstudio"
 PROFILE_URL = "https://www.tiktok.com/@{handle}"
 
 # Сколько первых постов профиля считаем «свежими» и выбираем из них
@@ -181,13 +183,52 @@ LIKE_CLICK_JS = """() => {
 }"""
 
 # Ссылка на собственный профиль в шапке — из неё берём ник аккаунта
+# Ник берём ТОЛЬКО из состояния приложения и навигации. Раньше тут стоял перебор
+# любых ссылок вида /@…, а на странице ленты это авторы чужих роликов: сработай
+# такой поиск — панель записала бы чужой ник как свой и внесла его в белый список
+# для лайков. Поэтому произвольные ссылки не рассматриваются вовсе.
 OWN_PROFILE_JS = r"""() => {
-    const links = document.querySelectorAll('a[href^="/@"]');
-    for (const a of links) {
-        const m = (a.getAttribute('href') || '').match(/^\/@([A-Za-z0-9._]{1,64})/);
-        if (m) return m[1];
-    }
-    return null;
+    // 1) состояние, которое TikTok кладёт в страницу для гидрации
+    const fromState = () => {
+        const ids = ['__UNIVERSAL_DATA_FOR_REHYDRATION__', 'SIGI_STATE'];
+        for (const id of ids) {
+            const el = document.getElementById(id);
+            if (!el || !el.textContent) continue;
+            try {
+                const data = JSON.parse(el.textContent);
+                const scope = data.__DEFAULT_SCOPE__ || {};
+                const ctx = scope['webapp.app-context'] || data.AppContext || {};
+                const uid = (ctx.user && (ctx.user.uniqueId || ctx.user.nickName))
+                    || ctx.uniqueId || (data.AppContext && data.AppContext.uniqueId);
+                if (uid) return String(uid);
+            } catch (e) { /* следующий источник */ }
+        }
+        return null;
+    };
+    // 2) явная ссылка «Профиль» в навигации — не из ленты
+    const fromNav = () => {
+        const sels = ['[data-e2e="nav-profile"]', 'a[data-e2e="nav-profile"]',
+                      'nav a[href^="/@"]', 'aside a[href^="/@"]',
+                      'header a[href^="/@"]'];
+        for (const sel of sels) {
+            const el = document.querySelector(sel);
+            const href = el && (el.getAttribute('href')
+                || (el.querySelector('a[href^="/@"]') || {}).getAttribute?.('href'));
+            const m = (href || '').match(/^\/@([A-Za-z0-9._]{1,64})/);
+            if (m) return m[1];
+        }
+        return null;
+    };
+    return fromState() || fromNav();
+}"""
+
+# Свой профиль отличается от чужого кнопкой редактирования: на чужом её нет.
+# Без этой проверки ошибочно определённый ник попал бы в белый список лайков.
+OWN_PROFILE_CHECK_JS = """() => {
+    const marks = ['[data-e2e="edit-profile"]', '[data-e2e="profile-edit"]'];
+    for (const sel of marks) if (document.querySelector(sel)) return true;
+    const text = (document.body.innerText || '').toLowerCase();
+    return text.includes('редактировать профиль') || text.includes('edit profile');
 }"""
 
 POST_LINKS_JS = """() => Array.from(document.querySelectorAll('a[href*="/video/"]'))
@@ -228,14 +269,41 @@ def _check_logged_in(page) -> None:
 
 
 def discover_handle(account) -> str | None:
-    """Определяет публичный ник аккаунта по ссылке на свой профиль."""
+    """Определяет публичный ник аккаунта и убеждается, что профиль действительно его.
+
+    Ошибиться здесь опаснее, чем не найти: чужой ник попал бы в белый список, и
+    панель начала бы лайкать посторонний аккаунт. Поэтому найденный ник
+    проверяется открытием профиля — на своём есть кнопка редактирования.
+    """
     pw, browser, ctx = _session(account)
     try:
         page = ctx.new_page()
-        page.goto(FEED_URL, wait_until="domcontentloaded", timeout=60_000)
+        handle = None
+        # Студия надёжнее ленты: там профиль всегда свой и в навигации, и в состоянии
+        for url in (STUDIO_URL, FEED_URL):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                _check_logged_in(page)
+                page.wait_for_timeout(3_000)
+                handle = parse_handle(page.evaluate(OWN_PROFILE_JS))
+                if handle:
+                    break
+            except ActivityError:
+                raise
+            except Exception:  # noqa: BLE001 — источник не сработал, пробуем следующий
+                continue
+        if not handle:
+            return None
+
+        page.goto(PROFILE_URL.format(handle=handle), wait_until="domcontentloaded",
+                  timeout=60_000)
         _check_logged_in(page)
-        page.wait_for_timeout(3_000)
-        return parse_handle(page.evaluate(OWN_PROFILE_JS))
+        page.wait_for_timeout(2_500)
+        if not page.evaluate(OWN_PROFILE_CHECK_JS):
+            raise ActivityError(
+                f"Нашёлся ник @{handle}, но этот профиль не выглядит вашим "
+                f"(нет кнопки редактирования). Впишите ник вручную.")
+        return handle
     finally:
         _close(pw, browser)
 

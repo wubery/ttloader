@@ -169,3 +169,32 @@ def test_version_without_build_arg_does_not_cry_wolf(client, monkeypatch):
     body = client.get("/api/system/version").json()
     assert body["running"] == "unknown"
     assert body["code_stale"] is False
+
+
+# --- Определение своего ника ---------------------------------------------------
+# Ошибиться тут опаснее, чем не найти: чужой ник попал бы в белый список лайков.
+
+def test_handle_search_ignores_arbitrary_links():
+    """В ленте ссылки /@… ведут на чужих авторов — брать их нельзя."""
+    from app.services.activity import OWN_PROFILE_JS
+
+    assert "querySelectorAll('a[href^=\"/@\"]')" not in OWN_PROFILE_JS
+    assert "__UNIVERSAL_DATA_FOR_REHYDRATION__" in OWN_PROFILE_JS   # состояние страницы
+    assert "nav-profile" in OWN_PROFILE_JS                          # ссылка «Профиль»
+
+
+def test_ownership_is_verified_by_edit_button():
+    from app.services.activity import OWN_PROFILE_CHECK_JS
+
+    assert "edit-profile" in OWN_PROFILE_CHECK_JS
+    assert "редактировать профиль" in OWN_PROFILE_CHECK_JS.lower()
+
+
+def test_studio_is_tried_before_feed():
+    """В студии профиль всегда свой, поэтому она первый источник."""
+    import inspect
+
+    from app.services import activity as act
+
+    src = inspect.getsource(act.discover_handle)
+    assert src.index("STUDIO_URL") < src.index("FEED_URL")

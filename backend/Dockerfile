@@ -16,6 +16,12 @@ RUN python -m playwright install chromium
 COPY app ./app
 
 # Данные (видео, баннеры, куки, БД) — во внешнем томе
+# Коммит, из которого собран образ. Панель сравнивает его с тем, что лежит в
+# рабочем каталоге на хосте: иначе «Обновлено успешно» пишется по git pull, даже
+# если контейнер остался на старом коде, и обновление выглядит применённым.
+ARG VP_COMMIT=unknown
+ENV VP_COMMIT=$VP_COMMIT
+
 ENV DATA_DIR=/data \
     VIDEOS_DIR=/data/videos \
     BANNERS_DIR=/data/banners \

@@ -332,7 +332,14 @@ export interface AuthMe {
 }
 
 export interface SystemVersion {
+  /** что лежит в рабочем каталоге на хосте (после git pull) */
   version: string;
+  /** из какого коммита собран ЗАПУЩЕННЫЙ контейнер */
+  running?: string;
+  /** контейнер старее того, что уже на диске — пересборка не доехала */
+  code_stale?: boolean;
+  /** на сколько коммитов рабочий каталог отстаёт от GitHub */
+  behind?: number;
   update_status: string;
   update_requested: boolean;
   /** ok | auth_required (приватный репо без токена) | error | no_git | "" */

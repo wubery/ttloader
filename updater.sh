@@ -77,12 +77,23 @@ ensure_git_safe() {
   rm -f update/.own_err
 }
 
+# Насколько рабочий каталог отстаёт от удалённой ветки. Панель показывает это
+# число рядом с версией: «обновилось» без изменения версии — самый частый повод
+# думать, что кнопка не работает.
+write_behind() {
+  local br
+  br="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  git fetch --quiet origin "$br" 2>/dev/null || true
+  git rev-list --count "HEAD..origin/$br" 2>/dev/null > update/behind || echo 0 > update/behind
+}
+
 # Пишет в update/git_status: ok | auth_required | error | no_git
 check_remote() {
   git rev-parse --git-dir >/dev/null 2>&1 || { echo no_git > update/git_status; return; }
   [ -f "$CRED_FILE" ] && git config credential.helper "store --file=$CRED_FILE"
   if git ls-remote --exit-code origin HEAD >/dev/null 2>update/.git_err; then
     echo ok > update/git_status
+    write_behind
   elif grep -qiE 'authentication failed|could not read username|terminal prompts disabled|invalid username or password|repository not found|permission denied' update/.git_err; then
     echo auth_required > update/git_status
   else
@@ -154,6 +165,9 @@ while true; do
     printf '%s\n' "$pull_out" >> update/updater.log
     if [ "$pull_rc" -eq 0 ]; then
       set_status "Пересборка контейнеров…"
+      # Прошиваем хеш в образ, чтобы панель могла отличить «git подтянулся» от
+      # «контейнер реально пересобран этим кодом».
+      export VP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
       # ${CF[@]+…} — чтобы пустой массив не спотыкался о set -u на старом bash
       if $DC ${CF[@]+"${CF[@]}"} up -d --build >> update/updater.log 2>&1; then
         write_version

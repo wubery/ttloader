@@ -2296,6 +2296,24 @@ function Settings() {
         </div>
         <div className="d-flex align-items-center gap-3 flex-wrap">
           <span className="fs-sm text-muted">Версия: {ver?.version ?? "..."}</span>
+          {/* Версию на диске пишет апдейтер после git pull, а running — то, из чего
+              реально собран контейнер. Раньше отдавалась только первая, и «обновлено
+              успешно» появлялось даже когда код в контейнере оставался прежним. */}
+          {ver?.code_stale && (
+            <span className="badge-vp badge-vp-danger" title={`в контейнере ${ver.running}`}>
+              <i className="bi bi-exclamation-triangle me-1" />контейнер на {ver.running} — пересборка не применилась
+            </span>
+          )}
+          {!!ver?.behind && ver.behind > 0 && (
+            <span className="badge-vp badge-vp-warning">
+              <i className="bi bi-arrow-down-circle me-1" />в GitHub новее на {ver.behind} коммит(ов)
+            </span>
+          )}
+          {ver?.running && !ver.code_stale && !ver.behind && (
+            <span className="badge-vp badge-vp-success" title={`код в контейнере: ${ver.running}`}>
+              <i className="bi bi-check2-circle me-1" />код актуален
+            </span>
+          )}
           <button className="btn btn-vp-outline btn-sm" onClick={doUpdate}><i className="bi bi-download me-1" />Обновить с GitHub</button>
           {ver?.git_status === "ok" && <span className="badge-vp badge-vp-success"><i className="bi bi-check-circle me-1" />доступ к репозиторию есть</span>}
           {ver?.git_status === "auth_required" && <span className="badge-vp badge-vp-warning"><i className="bi bi-lock me-1" />нужен токен GitHub</span>}

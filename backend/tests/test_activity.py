@@ -150,3 +150,22 @@ def test_swapped_bounds_do_not_crash():
     t = act.next_likes_time(datetime(2026, 9, 7, 12, 0),
                             interval_min=180, interval_max=45, rnd=rnd)
     assert t > datetime(2026, 9, 7, 12, 0)
+
+
+# --- Честная версия панели ----------------------------------------------------
+# Обновление нельзя принимать на веру: апдейтер пишет версию после git pull, а код
+# в контейнере может остаться прежним, если пересборка не доехала.
+
+def test_version_reports_running_commit(client, monkeypatch):
+    monkeypatch.setenv("VP_COMMIT", "abc1234")
+    body = client.get("/api/system/version").json()
+    assert body["running"] == "abc1234"
+    assert "behind" in body and "code_stale" in body
+
+
+def test_version_without_build_arg_does_not_cry_wolf(client, monkeypatch):
+    """Старый образ без прошитого коммита не должен показывать ложную тревогу."""
+    monkeypatch.delenv("VP_COMMIT", raising=False)
+    body = client.get("/api/system/version").json()
+    assert body["running"] == "unknown"
+    assert body["code_stale"] is False

@@ -49,8 +49,27 @@ def _write(name: str, content: str, mode: int = 0o644) -> None:
 
 @router.get("/version")
 def version():
+    """Версия панели — тремя числами, чтобы обновление нельзя было принять на веру.
+
+    `version` — что лежит в рабочем каталоге на хосте (его пишет updater.sh после
+    git pull), `running` — из какого коммита собран ЗАПУЩЕННЫЙ контейнер, `behind`
+    — на сколько коммитов рабочий каталог отстаёт от GitHub. Раньше отдавался
+    только первый, и «Обновлено успешно» появлялось даже тогда, когда контейнер
+    остался на старом коде.
+    """
+    on_disk = _read("version", "unknown")
+    running = os.environ.get("VP_COMMIT", "unknown")
+    try:
+        behind = int(_read("behind", "0") or 0)
+    except ValueError:
+        behind = 0
     return {
-        "version": _read("version", "unknown"),
+        "version": on_disk,
+        "running": running,
+        # Код в контейнере старше того, что уже лежит на диске: нужна пересборка
+        "code_stale": bool(running != "unknown" and on_disk not in ("", "unknown")
+                           and running != on_disk),
+        "behind": behind,
         "update_status": _read("status", ""),
         "update_requested": os.path.exists(os.path.join(UPDATE_DIR, "requested")),
         # ok | auth_required (приватный репо без токена) | error | no_git | "" (нет апдейтера)

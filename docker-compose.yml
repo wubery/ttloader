@@ -1,6 +1,10 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        # Хеш коммита прокидывает updater.sh; вручную можно не задавать
+        VP_COMMIT: "${VP_COMMIT:-unknown}"
     restart: unless-stopped
     # tini как pid 1 — «пожинает» дочерние процессы Chromium (иначе копятся zombie)
     init: true

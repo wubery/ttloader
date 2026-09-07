@@ -55,6 +55,9 @@ export GIT_ASKPASS=/bin/true
 
 write_version() {
   git rev-parse --short HEAD > update/version 2>/dev/null || echo "unknown" > update/version
+  # Отпечаток работающего апдейтера: по нему видно, что процесс уже на новом коде,
+  # а не остался в памяти со старым.
+  md5sum "$0" 2>/dev/null | cut -c1-8 > update/updater_sum || true
 }
 
 # «scheme://host[:port]» из remote-URL — в этом виде git ищет запись в credential store
@@ -154,8 +157,22 @@ check_remote
 # апдейтера, перезапускаем себя, иначе правки применятся только после ребута.
 SELF_SUM="$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)"
 
+# Перечитываем себя на КАЖДОМ тике, а не только после успешной пересборки.
+# Иначе правки в самом апдейтере не применяются вовсе: чтобы их подхватить,
+# нужна была удачная пересборка, а она идёт уже старым кодом — и так по кругу,
+# пока процесс не перезапустят руками.
+self_changed() {
+  [ -n "$SELF_SUM" ] || return 1
+  [ "$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)" != "$SELF_SUM" ]
+}
+
 tick=0
 while true; do
+  if self_changed; then
+    echo "updater: файл изменился, перезапускаюсь" >> update/updater.log
+    exec /usr/bin/env bash "$0"
+  fi
+
   apply_token
 
   if [ -f update/requested ]; then
@@ -176,9 +193,9 @@ while true; do
       if $DC ${CF[@]+"${CF[@]}"} build --build-arg VP_COMMIT="$VP_COMMIT" >> update/updater.log 2>&1          && $DC ${CF[@]+"${CF[@]}"} up -d >> update/updater.log 2>&1; then
         write_version
         set_status "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')"
-        if [ -n "$SELF_SUM" ] && [ "$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)" != "$SELF_SUM" ]; then
+        if self_changed; then
           echo "updater: обновился сам, перезапускаюсь" >> update/updater.log
-          exec /usr/bin/env bash "$0"   # апдейтер обновил сам себя
+          exec /usr/bin/env bash "$0"
         fi
       else
         set_status "Ошибка пересборки (см. update/updater.log)"

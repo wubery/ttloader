@@ -70,6 +70,9 @@ def version():
         "code_stale": bool(running != "unknown" and on_disk not in ("", "unknown")
                            and running != on_disk),
         "behind": behind,
+        # Отпечаток работающего апдейтера: пустой — значит процесс на хосте всё
+        # ещё крутит старый код и правки в updater.sh до него не дошли
+        "updater_sum": _read("updater_sum", ""),
         "update_status": _read("status", ""),
         "update_requested": os.path.exists(os.path.join(UPDATE_DIR, "requested")),
         # ok | auth_required (приватный репо без токена) | error | no_git | "" (нет апдейтера)

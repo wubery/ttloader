@@ -340,6 +340,8 @@ export interface SystemVersion {
   code_stale?: boolean;
   /** на сколько коммитов рабочий каталог отстаёт от GitHub */
   behind?: number;
+  /** отпечаток работающего апдейтера; пусто — процесс на хосте со старым кодом */
+  updater_sum?: string;
   update_status: string;
   update_requested: boolean;
   /** ok | auth_required (приватный репо без токена) | error | no_git | "" */

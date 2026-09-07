@@ -2322,6 +2322,15 @@ function Settings() {
         </div>
         {/* Апдейтер — отдельный процесс на хосте. Если он не запущен, кнопка лишь
             ставит флаг, и статус «Запрошено обновление…» висит бесконечно. */}
+        {/* Жив, но без отпечатка — значит процесс запущен до появления
+            самоперезапуска и правки в updater.sh до него не доедут. */}
+        {ver && ver.updater_alive && ver.updater_sum === "" && (
+          <div className="alert alert-warning py-2 fs-sm mt-2 mb-0">
+            <i className="bi bi-arrow-repeat me-1" />
+            Апдейтер работает старым кодом — правки самого обновления не применятся.
+            Один раз перезапустите его: <code>sudo systemctl restart vp-updater</code>
+          </div>
+        )}
         {ver && ver.updater_alive === false && (
           <div className="alert alert-danger py-2 fs-sm mt-2 mb-0">
             <i className="bi bi-exclamation-octagon me-1" />

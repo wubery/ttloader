@@ -96,8 +96,7 @@ def update_log(lines: int = 80):
     except OSError:
         return {"lines": [], "detail": "Журнал недоступен — апдейтер ещё не запускался"}
     # Токен в лог не пишется, но подстраховываемся: файл отдаётся в браузер
-    safe = [ln.rstrip("
-") for ln in tail
+    safe = [ln.rstrip() for ln in tail
             if "x-access-token" not in ln and "ghp_" not in ln]
     return {"lines": safe, "detail": ""}
 

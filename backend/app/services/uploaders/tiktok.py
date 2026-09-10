@@ -40,14 +40,29 @@ HD_HINTS = (
     "высоком качестве", "высокого качества", "высококачествен",
     "high quality", "high-quality", "hd video", "upload hd", "загружать в hd",
 )
-# Поиск и включение тумблера прямо в странице. Кликаем из DOM, потому что клики
-# Playwright перехватывают оверлеи TikTok (та же причина, что и в _kill_overlays),
-# и обязательно перечитываем состояние: у React-компонентов клик по обёртке
-# иногда не доходит до самого переключателя.
+# Только ЧИТАЕМ состояние тумблера, ничего не переключая.
+#
+# Почему не кликаем: в TikTok Web Studio этот параметр включён всегда и менять
+# его нельзя — подсказка у самого тумблера говорит «В Web Studio все видео
+# публикуются в формате HD. Этот параметр изменить нельзя». Прежняя версия
+# пыталась его нажать: вреда не было только потому, что элемент заблокирован,
+# но будь он кликабельным, мы бы HD сами и выключили.
+#
+# Признаки включённости берём с запасом: у разных сборок студии это то
+# aria-checked, то data-state, то класс. Заблокированный тумблер рядом с
+# текстом про HD тоже считаем включённым — это и есть штатное состояние.
 HD_TOGGLE_JS = """(hints) => {
-        const isOn = (el) => el.getAttribute('aria-checked') === 'true'
+        const truthy = (v) => v === '' || v === 'true' || v === 'checked' || v === 'on';
+        const isOn = (el) => truthy(el.getAttribute('aria-checked'))
+            || truthy(el.getAttribute('aria-selected'))
+            || truthy(el.getAttribute('data-state'))
+            || el.hasAttribute('data-checked')
             || el.checked === true
-            || /checked|active|-on/i.test(el.className || '');
+            || !!el.querySelector('input[type=checkbox]:checked')
+            || /(^|[-_ ])(checked|active|selected|on)([-_ ]|$)/i.test(el.className || '');
+        const locked = (el) => el.getAttribute('aria-disabled') === 'true'
+            || el.disabled === true
+            || getComputedStyle(el).pointerEvents === 'none';
         const nodes = document.querySelectorAll(
             '[role=switch], input[type=checkbox], [class*=witch]');
         for (const el of nodes) {
@@ -55,12 +70,11 @@ HD_TOGGLE_JS = """(hints) => {
             for (let i = 0; i < 4 && p; i++, p = p.parentElement) ctx += ' ' + (p.innerText || '');
             ctx = ctx.toLowerCase();
             if (!hints.some((h) => ctx.includes(h))) continue;
-            if (isOn(el)) return 'already';
-            (el.closest('label') || el).click();
-            // Проверяем, что тумблер реально переключился: у React-компонентов
-            // клик по обёртке иногда не доходит до состояния.
-            if (!isOn(el)) el.click();
-            return isOn(el) ? 'enabled' : 'unchanged';
+            if (isOn(el)) return 'on';
+            if (locked(el)) return 'on';   // менять нельзя — значит это и есть HD по умолчанию
+            return 'off|' + (el.tagName || '?') + '|' + (el.className || '').slice(0, 80)
+                 + '|aria-checked=' + el.getAttribute('aria-checked')
+                 + '|data-state=' + el.getAttribute('data-state');
         }
         return 'not_found';
     }"""
@@ -187,13 +201,15 @@ def upload_tiktok(
 
             # Раздел «Дополнительно» с настройками появляется, когда форма
             # полностью отрисована, — поэтому проверяем качество после заливки.
-            hd = _enable_hd(page, log=_log)
+            # Только проверяем: переключать в Web Studio нечего (см. _check_hd).
+            hd = _check_hd(page, log=_log)
             _log({
-                "enabled": "Включил «Загружать в высоком качестве».",
-                "already": "«Загружать в высоком качестве» уже включено.",
-                "unchanged": "Нашёл настройку качества, но переключить её не удалось.",
-                "not_found": "Настройка «Загружать в высоком качестве» не найдена — "
-                             "TikTok не показывает её для этого аккаунта.",
+                "on": "Высококачественная загрузка включена (в Web Studio это значение "
+                      "по умолчанию и изменению не подлежит).",
+                "off": "ВНИМАНИЕ: высококачественная загрузка выключена — ролик уйдёт "
+                       "в пониженном качестве.",
+                "not_found": "Настройку качества TikTok не показывает; из Web Studio "
+                             "публикация в любом случае идёт в HD.",
             }.get(hd, "Настройку качества проверить не удалось."))
 
             _log("Публикую…")
@@ -543,52 +559,45 @@ def _confirm_publish_modal(page, log=lambda m: None) -> bool:
     return True
 
 
-def _enable_hd(page, log=lambda m: None) -> str:
-    """Включает «Загружать в высоком качестве» в разделе «Дополнительно».
+def _check_hd(page, log=lambda m: None) -> str:
+    """Проверяет «Высококачественные загрузки», НЕ трогая переключатель.
 
-    Без этой галочки веб-загрузчик TikTok отдаёт ролик в пониженном качестве —
-    сколько ни улучшай рендер, зритель увидит мыло. Раздел свёрнут, называется
-    по-разному и в части аккаунтов отсутствует, поэтому ищем по тексту рядом с
-    переключателем и НИКОГДА не роняем задачу: не нашли — пишем в лог и идём дальше.
+    В Web Studio параметр включён по умолчанию и недоступен для изменения, так
+    что задача проверки — не «включить», а «убедиться и сказать». Настройка
+    спрятана в свёрнутом разделе и называется по-разному, поэтому ищем по тексту
+    рядом с переключателем. Задачу не роняем никогда.
 
-    Возвращает: enabled | already | unchanged | not_found | error.
+    Возвращает: on | off | not_found | error.
     """
     from playwright.sync_api import Error as PWError
 
-
-    def _try() -> str:
-        """Одна попытка; 'unchanged' повторяем — переключатель мог не успеть ожить.
-
-        Такое видно на только что вставленном в DOM разделе: текст уже на месте,
-        а обработчик клика ещё не привязан, и состояние не меняется.
-        """
-        for attempt in range(3):
-            res = page.evaluate(HD_TOGGLE_JS, list(HD_HINTS))
-            if res != "unchanged":
-                return res
-            page.wait_for_timeout(500)
-        return "unchanged"
+    def _read() -> str:
+        return page.evaluate(HD_TOGGLE_JS, list(HD_HINTS))
 
     try:
-        result = _try()
-        if result != "not_found":
-            return result
-
-        # Не нашли на виду — раскрываем «Дополнительно» и смотрим снова.
-        for label in MORE_SETTINGS_LABELS:
-            try:
-                more = page.get_by_text(label, exact=False).first
-                if more.count() == 0 or not more.is_visible():
+        result = _read()
+        if result == "not_found":
+            # Не нашли на виду — раскрываем «Дополнительно» и смотрим снова.
+            for label in MORE_SETTINGS_LABELS:
+                try:
+                    more = page.get_by_text(label, exact=False).first
+                    if more.count() == 0 or not more.is_visible():
+                        continue
+                    more.click(timeout=2_000, no_wait_after=True)
+                    page.wait_for_timeout(700)
+                    result = _read()
+                    if result != "not_found":
+                        log(f"Раскрыл раздел «{label}».")
+                        break
+                except PWError:
                     continue
-                more.click(timeout=2_000, no_wait_after=True)
-                page.wait_for_timeout(700)
-                result = _try()
-                if result != "not_found":
-                    log(f"Раскрыл раздел «{label}».")
-                    return result
-            except PWError:
-                continue
-        return "not_found"
+
+        if result.startswith("off|"):
+            # Диагностика: если TikTok поменяет вёрстку, по этой строке будет
+            # видно, что именно нашлось, вместо гадания по «не сработало».
+            log("Разбор тумблера качества: " + result[4:])
+            return "off"
+        return result
     except PWError as e:
         log(f"Не удалось проверить настройку качества: {e}")
         return "error"

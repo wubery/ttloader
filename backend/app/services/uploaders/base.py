@@ -204,6 +204,13 @@ def require_cookies(cookies_path: str | None) -> str:
     return cookies_path
 
 
+# Сколько ждём, пока станет ясно, жива ли сессия. TikTok отправляет на вход
+# через несколько секунд после загрузки, поэтому одной проверки URL мало.
+_ALIVE_WAIT_MS = 20_000
+
+# По этим кускам адреса понимаем, что сессия не принята.
+_DEAD_SESSION_MARKS = ("/login", "/signup", "accounts.google.com")
+
 # Страницы, которые честно редиректят на вход, если сессия умерла
 _ALIVE_CHECK_URLS = {
     "tiktok": "https://www.tiktok.com/tiktokstudio/upload?from=upload",
@@ -216,6 +223,13 @@ def cookies_alive(platform: str, cookies_path: str | None, proxy_url: str | None
 
     Нужна и планировщику (автоперелогин), и постингу — раньше протухшие куки
     обнаруживались только по невнятному «не найдено поле загрузки».
+
+    ВАЖНО про ожидание: TikTok уводит на страницу входа НЕ сразу. Сначала
+    отдаётся оболочка студии, и лишь через несколько секунд приложение решает,
+    что сессия не годится, и делает редирект уже на стороне клиента. Проверка,
+    читавшая page.url сразу после load, этого не заставала и возвращала «куки
+    живы» для мёртвой сессии — например, когда аккаунту меняли прокси на другую
+    страну. Поэтому ждём редирект, а не одну загрузку.
     """
     from playwright.sync_api import sync_playwright
 
@@ -235,8 +249,27 @@ def cookies_alive(platform: str, cookies_path: str | None, proxy_url: str | None
             ctx.add_init_script(STEALTH_INIT_JS)
             page = ctx.new_page()
             page.goto(url, wait_until="load", timeout=60_000)
-            cur = (page.url or "").lower()
-            return "/login" not in cur and "/signup" not in cur and "accounts.google.com" not in cur
+
+            # Ждём перехода на страницу входа, просто опрашивая адрес.
+            #
+            # Быстрого признака «сессия жива» у студии нет: первые секунды
+            # страница вошедшего и гостя выглядят одинаково, а поле загрузки
+            # приезжает во вложенном фрейме почти через минуту. Зато мёртвая
+            # сессия уводит на /login сама — по замерам около десяти секунд.
+            # Поэтому «жива» = за отведённое время никуда не увели.
+            #
+            # Опрашиваем адрес, а не ждём навигацию через wait_for_url: во время
+            # этого редиректа TikTok обрывает свои же запросы, и ожидание падает
+            # с ERR_ABORTED вместо ответа. Чтение page.url так подвести не может.
+            waited = 0
+            step = 700
+            while True:
+                if any(m in (page.url or "").lower() for m in _DEAD_SESSION_MARKS):
+                    return False
+                if waited >= _ALIVE_WAIT_MS:
+                    return True
+                page.wait_for_timeout(step)
+                waited += step
         finally:
             try:
                 browser.close()

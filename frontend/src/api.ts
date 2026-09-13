@@ -373,6 +373,7 @@ export interface SettingsData {
   tg_chat_id: string | null;
   tg_login_enabled: boolean;
   ms_client_id: string | null;
+  allow_shared_proxy: boolean;
 }
 
 async function uploadInChunks(file: File, onProgress?: (p: number) => void): Promise<Video> {
@@ -445,7 +446,7 @@ export const api = {
 
   // settings
   getSettings: () => fetch("/api/settings").then((r) => j<SettingsData>(r)),
-  updateSettings: (b: Partial<{ tg_bot_token: string; tg_chat_id: string; tg_login_enabled: boolean; new_password: string; ms_client_id: string }>) =>
+  updateSettings: (b: Partial<{ tg_bot_token: string; tg_chat_id: string; tg_login_enabled: boolean; new_password: string; ms_client_id: string; allow_shared_proxy: boolean }>) =>
     fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),

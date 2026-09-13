@@ -174,6 +174,7 @@ class SettingsOut(BaseModel):
     tg_chat_id: str | None
     tg_login_enabled: bool
     ms_client_id: str | None = None
+    allow_shared_proxy: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -182,6 +183,7 @@ class SettingsUpdate(BaseModel):
     tg_login_enabled: bool | None = None
     new_password: str | None = None
     ms_client_id: str | None = None   # Azure-приложение для чтения outlook-почты
+    allow_shared_proxy: bool | None = None
 
 
 # ---------- Активность ----------

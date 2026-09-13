@@ -22,6 +22,7 @@ def get_settings(db: Session = Depends(get_db)):
         tg_chat_id=row.tg_chat_id,
         tg_login_enabled=row.tg_login_enabled,
         ms_client_id=row.ms_client_id,
+        allow_shared_proxy=row.allow_shared_proxy,
     )
 
 
@@ -38,6 +39,8 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
         row.tg_login_enabled = payload.tg_login_enabled
     if payload.ms_client_id is not None:
         row.ms_client_id = payload.ms_client_id.strip() or None
+    if payload.allow_shared_proxy is not None:
+        row.allow_shared_proxy = payload.allow_shared_proxy
     if payload.new_password:
         row.admin_pass_hash = hash_password(payload.new_password)
     db.commit()
@@ -49,4 +52,5 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
         tg_chat_id=row.tg_chat_id,
         tg_login_enabled=row.tg_login_enabled,
         ms_client_id=row.ms_client_id,
+        allow_shared_proxy=row.allow_shared_proxy,
     )

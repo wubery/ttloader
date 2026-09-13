@@ -25,6 +25,10 @@ class AppSettings(Base):
     tg_login_enabled: Mapped[bool] = mapped_column(default=False)
     # Azure-приложение для чтения outlook/hotmail: один client_id на все ящики
     ms_client_id: Mapped[str | None] = mapped_column(String(120), default=None)
+    # Разрешить один прокси нескольким аккаунтам. По умолчанию запрещено: общий
+    # IP даёт TikTok повод связать аккаунты. Включают осознанно — например, когда
+    # прокси мобильный и IP у него всё равно общий на многих пользователей.
+    allow_shared_proxy: Mapped[bool] = mapped_column(default=False, server_default="0")
 
     # --- Проверка активности (правится на вкладке «Активность») ------------------
     # Всё диапазонами: ровное расписание у десятка аккаунтов выглядит как ферма.

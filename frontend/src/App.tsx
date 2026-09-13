@@ -2132,6 +2132,7 @@ function Settings() {
   const [enabled, setEnabled] = useState(false);
   const [newPass, setNewPass] = useState("");
   const [msClientId, setMsClientId] = useState("");
+  const [sharedProxy, setSharedProxy] = useState(false);
   const [ver, setVer] = useState<SystemVersion | null>(null);
   const [gitToken, setGitToken] = useState("");
   const [gitOpen, setGitOpen] = useState(false);
@@ -2140,7 +2141,7 @@ function Settings() {
   const toast = useToast();
 
   useEffect(() => {
-    api.getSettings().then((d) => { setS(d); setChatId(d.tg_chat_id ?? ""); setEnabled(d.tg_login_enabled); setMsClientId(d.ms_client_id ?? ""); }).catch((e) => toast.add("error", e.message));
+    api.getSettings().then((d) => { setS(d); setChatId(d.tg_chat_id ?? ""); setEnabled(d.tg_login_enabled); setMsClientId(d.ms_client_id ?? ""); setSharedProxy(!!d.allow_shared_proxy); }).catch((e) => toast.add("error", e.message));
     const load = () => api.systemVersion().then(setVer).catch(() => {});
     load();
     const t = setInterval(load, 5000);
@@ -2185,7 +2186,7 @@ function Settings() {
 
   async function save() {
     try {
-      const body: any = { tg_chat_id: chatId, tg_login_enabled: enabled, ms_client_id: msClientId };
+      const body: any = { tg_chat_id: chatId, tg_login_enabled: enabled, ms_client_id: msClientId, allow_shared_proxy: sharedProxy };
       if (token) body.tg_bot_token = token;
       if (newPass) body.new_password = newPass;
       const d = await api.updateSettings(body);
@@ -2234,6 +2235,25 @@ function Settings() {
             к почте по обычному паролю. Регистрация приложения — разовая и бесплатная,
             пошагово описана в INSTALL.md. Дальше у каждого профиля жмите «Подключить почту».
           </div>
+        </div>
+      </div>
+
+      {/* Прокси */}
+      <div className="vp-card">
+        <div className="vp-card-header">
+          <h3><i className="bi bi-hdd-network me-2 text-accent" />Прокси</h3>
+        </div>
+        <div className="form-check form-switch">
+          <input className="form-check-input" type="checkbox" checked={sharedProxy}
+                 onChange={(e) => setSharedProxy(e.target.checked)} id="sharedProxy" />
+          <label className="form-check-label fs-sm" htmlFor="sharedProxy">
+            Разрешить один и тот же прокси нескольким аккаунтам
+          </label>
+        </div>
+        <div className="form-text fs-sm">
+          По умолчанию панель не даёт привязать один прокси к двум аккаунтам: общий IP —
+          повод для TikTok связать их между собой. Включайте, если понимаете риск
+          (например, мобильный прокси, где IP и так общий на много пользователей).
         </div>
       </div>
 

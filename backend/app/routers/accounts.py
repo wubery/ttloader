@@ -59,7 +59,15 @@ def _validate_proxy(proxy_url: str) -> None:
 
 def _ensure_proxy_unique(db: Session, proxy_url: str, exclude_id: int | None = None) -> None:
     """Каждый аккаунт — свой прокси. Запрещаем назначить один proxy_url двум аккаунтам,
-    иначе у них будет общий IP (TikTok может связать аккаунты)."""
+    иначе у них будет общий IP (TikTok может связать аккаунты).
+
+    Запрет снимается настройкой панели «Разрешить общий прокси» — для случаев,
+    когда пользователь понимает риск (мобильный прокси с общим IP и т.п.).
+    """
+    from ..services.appsettings import get_settings_row
+
+    if get_settings_row(db).allow_shared_proxy:
+        return
     q = db.query(Account).filter(Account.proxy_url == proxy_url)
     if exclude_id is not None:
         q = q.filter(Account.id != exclude_id)

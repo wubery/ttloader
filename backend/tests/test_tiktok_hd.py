@@ -1,9 +1,9 @@
-"""Настройка «Загружать в высоком качестве» в разделе «Дополнительно».
+"""Настройка «Высококачественные загрузки» в разделе «Дополнительно».
 
-Без неё веб-загрузчик TikTok отдаёт ролик в пониженном качестве — сколько ни
-улучшай рендер, зритель увидит мыло. Сам клик проверить юнит-тестом нельзя (он
-живёт в браузере), поэтому здесь проверяется то, что ломается на практике: фразы,
-по которым тумблер узнаётся среди соседних переключателей.
+В Web Studio она включена всегда и изменению не подлежит, поэтому панель её
+только читает. Работу с браузером юнит-тестом не проверить, поэтому здесь
+проверяется то, что ломается на практике: фразы, по которым тумблер узнаётся
+среди соседних переключателей, и то, что скрипт по нему не кликает.
 """
 from __future__ import annotations
 
@@ -50,8 +50,20 @@ def test_advanced_tab_is_first_candidate():
     assert "Advanced" in MORE_SETTINGS_LABELS
 
 
-def test_toggle_script_verifies_result():
-    """Скрипт обязан перечитывать состояние, а не считать клик успехом."""
+def test_toggle_script_only_reads_state():
+    """Тумблер в Web Studio неизменяем — скрипт обязан его не трогать.
+
+    Вреда от прежнего клика не было только потому, что элемент заблокирован.
+    Будь он кликабельным, панель сама выключила бы HD, поэтому отсутствие
+    click() здесь — не придирка к стилю, а защита от этого случая.
+    """
     assert "aria-checked" in HD_TOGGLE_JS
-    assert "'enabled'" in HD_TOGGLE_JS and "'unchanged'" in HD_TOGGLE_JS
-    assert "'already'" in HD_TOGGLE_JS and "'not_found'" in HD_TOGGLE_JS
+    assert ".click()" not in HD_TOGGLE_JS
+    assert "'on'" in HD_TOGGLE_JS and "'not_found'" in HD_TOGGLE_JS
+    assert "'off|'" in HD_TOGGLE_JS          # к «выключено» прилагается диагностика
+
+
+def test_locked_toggle_counts_as_enabled():
+    """Заблокированный тумблер рядом с текстом про HD — это штатное «включено»."""
+    assert "aria-disabled" in HD_TOGGLE_JS
+    assert "pointerEvents" in HD_TOGGLE_JS

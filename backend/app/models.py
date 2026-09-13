@@ -29,10 +29,10 @@ class AppSettings(Base):
     # --- Проверка активности (правится на вкладке «Активность») ------------------
     # Всё диапазонами: ровное расписание у десятка аккаунтов выглядит как ферма.
     activity_enabled: Mapped[bool] = mapped_column(default=True, server_default="1")
-    activity_per_day_min: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
-    activity_per_day_max: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
-    activity_seconds_min: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
-    activity_seconds_max: Mapped[int] = mapped_column(Integer, default=180, server_default="180")
+    activity_per_day_min: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
+    activity_per_day_max: Mapped[int] = mapped_column(Integer, default=6, server_default="6")
+    activity_seconds_min: Mapped[int] = mapped_column(Integer, default=180, server_default="180")
+    activity_seconds_max: Mapped[int] = mapped_column(Integer, default=600, server_default="600")
     # Окно суток: ночью живой человек ленту не листает
     activity_hour_from: Mapped[int] = mapped_column(Integer, default=9, server_default="9")
     activity_hour_to: Mapped[int] = mapped_column(Integer, default=23, server_default="23")
@@ -46,6 +46,15 @@ class AppSettings(Base):
     like_cooldown_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
     activity_max_concurrent: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     next_likes_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
+    # --- Разгон нового аккаунта -------------------------------------------------
+    # Свежий профиль, который с первого дня работает по полному расписанию,
+    # выглядит подозрительнее молчащего. Нагрузка растёт от доли до полной.
+    warmup_enabled: Mapped[bool] = mapped_column(default=True, server_default="1")
+    warmup_days: Mapped[int] = mapped_column(Integer, default=14, server_default="14")
+    warmup_start_percent: Mapped[int] = mapped_column(Integer, default=25, server_default="25")
+    # С какого дня разгона аккаунту разрешены лайки: сначала только просмотры
+    warmup_likes_after_day: Mapped[int] = mapped_column(Integer, default=4, server_default="4")
 
 
 class Platform(str, enum.Enum):
@@ -132,6 +141,10 @@ class Account(Base):
     # Когда аккаунт в следующий раз пойдёт смотреть ленту. Разыгрывается случайно
     # из диапазонов настроек — расписание не должно быть ровным.
     next_activity_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Начало разгона. Пусто — считаем от даты добавления аккаунта в панель;
+    # заполняется, только когда прогрев запускают заново вручную. Из-за этого
+    # обновление панели не сбрасывает разгон у давно работающих аккаунтов.
+    warmup_started_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
     # Участвует ли аккаунт в автоперелогине при протухших куках
     auto_login: Mapped[bool] = mapped_column(default=True, server_default="1")

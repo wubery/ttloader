@@ -55,6 +55,21 @@ export interface ActivitySettings {
   like_cooldown_hours: number;
   activity_max_concurrent: number;
   next_likes_at: string | null;
+  warmup_enabled: boolean;
+  warmup_days: number;
+  warmup_start_percent: number;
+  warmup_likes_after_day: number;
+}
+
+/** Где аккаунт на шкале разгона: свежий работает не в полную силу. */
+export interface Warmup {
+  account_id: number;
+  account_name: string;
+  day: number;
+  days_total: number;
+  percent: number;
+  likes_allowed: boolean;
+  started_at: string | null;
 }
 
 /** Событие журнала: просмотр ленты или лайк посту другого аккаунта панели. */
@@ -454,6 +469,9 @@ export const api = {
     fetch(`/api/activity/log?limit=${limit}`).then((r) => j<ActivityRun[]>(r)),
   runActivity: (accountId: number) =>
     fetch(`/api/activity/run/${accountId}`, { method: "POST" }).then((r) => j<any>(r)),
+  warmup: () => fetch("/api/activity/warmup").then((r) => j<Warmup[]>(r)),
+  restartWarmup: (accountId: number) =>
+    fetch(`/api/activity/warmup/${accountId}/restart`, { method: "POST" }).then((r) => j<any>(r)),
   discoverHandle: (accountId: number) =>
     fetch(`/api/accounts/${accountId}/discover-handle`, { method: "POST" }).then((r) => j<Account>(r)),
 

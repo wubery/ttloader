@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import Account, ActivityRun
-from ..schemas import ActivityRunOut, ActivitySettingsOut, ActivitySettingsUpdate
+from ..schemas import (
+    ActivityRunOut,
+    ActivitySettingsOut,
+    ActivitySettingsUpdate,
+    WarmupOut,
+)
 from ..services.appsettings import get_settings_row
 
 router = APIRouter(prefix="/api/activity", tags=["activity"])
@@ -26,6 +31,8 @@ LIMITS = {
     "likes_per_run_min": (0, 20), "likes_per_run_max": (0, 20),
     "likes_interval_min": (5, 1440), "likes_interval_max": (5, 1440),
     "like_cooldown_hours": (1, 720), "activity_max_concurrent": (1, 5),
+    "warmup_days": (1, 60), "warmup_start_percent": (1, 100),
+    "warmup_likes_after_day": (1, 60),
 }
 
 
@@ -48,6 +55,45 @@ def update_activity_settings(payload: ActivitySettingsUpdate, db: Session = Depe
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.get("/warmup", response_model=list[WarmupOut])
+def warmup_state(db: Session = Depends(get_db)):
+    """Где каждый аккаунт на шкале разгона: день, текущая доля нагрузки, лайки."""
+    from datetime import datetime
+
+    from ..services import activity as act
+
+    row = get_settings_row(db)
+    now = datetime.now()
+    out = []
+    for a in db.query(Account).filter(Account.active.is_(True)).all():
+        started = a.warmup_started_at or a.created_at
+        factor = act.warmup_factor(started, now, days=row.warmup_days,
+                                   start_percent=row.warmup_start_percent,
+                                   enabled=row.warmup_enabled)
+        out.append(WarmupOut(
+            account_id=a.id, account_name=a.name,
+            day=act.warmup_day(started, now), days_total=row.warmup_days,
+            percent=round(factor * 100),
+            likes_allowed=act.likes_allowed(started, now,
+                                            after_day=row.warmup_likes_after_day,
+                                            enabled=row.warmup_enabled),
+            started_at=started))
+    return out
+
+
+@router.post("/warmup/{account_id}/restart")
+def restart_warmup(account_id: int, db: Session = Depends(get_db)):
+    """Начать прогрев заново — например, после смены прокси или долгого простоя."""
+    from datetime import datetime
+
+    acc = db.get(Account, account_id)
+    if acc is None:
+        raise HTTPException(404, "Аккаунт не найден")
+    acc.warmup_started_at = datetime.now()
+    db.commit()
+    return {"ok": True, "detail": f"«{acc.name}»: разгон начат заново"}
 
 
 @router.get("/log", response_model=list[ActivityRunOut])

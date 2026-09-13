@@ -199,17 +199,31 @@ def run_browse(account_id: int) -> None:
                     return
                 row = get_settings_row(db)
                 rnd = _random.Random()
-                seconds = act.session_seconds(seconds_min=row.activity_seconds_min,
-                                              seconds_max=row.activity_seconds_max, rnd=rnd)
+                now = datetime.now()
+                # Разгон: и длина сессии, и частота заходов сжимаются одним
+                # коэффициентом, поэтому свежий аккаунт не выдаёт себя всплеском
+                # активности в первый же день.
+                started = acc.warmup_started_at or acc.created_at
+                factor = act.warmup_factor(
+                    started, now, days=row.warmup_days,
+                    start_percent=row.warmup_start_percent, enabled=row.warmup_enabled)
+                smin, smax = act.scale_range(row.activity_seconds_min,
+                                             row.activity_seconds_max, factor, floor=20)
+                seconds = act.session_seconds(seconds_min=smin, seconds_max=smax, rnd=rnd)
                 status, detail = "ok", ""
                 try:
                     detail = act.browse_feed(acc, seconds, rnd=rnd)
                 except Exception as e:  # noqa: BLE001 — сессия не должна ронять планировщик
                     status, detail = "error", str(e)
+                if status == "ok" and factor < 1.0:
+                    detail = (f"{detail}; разгон: день {act.warmup_day(started, now)} "
+                              f"из {row.warmup_days}, {round(factor * 100)}%")
                 acc.last_activity_at = datetime.now()
+                per_min, per_max = act.scale_range(row.activity_per_day_min,
+                                                   row.activity_per_day_max, factor)
                 acc.next_activity_at = act.next_activity_time(
                     datetime.now(),
-                    per_day_min=row.activity_per_day_min, per_day_max=row.activity_per_day_max,
+                    per_day_min=per_min, per_day_max=per_max,
                     hour_from=row.activity_hour_from, hour_to=row.activity_hour_to, rnd=rnd)
                 name = acc.name
                 db.commit()
@@ -291,7 +305,13 @@ def _activity_tick() -> None:
 
         if row.likes_enabled and (row.next_likes_at is None or row.next_likes_at <= now):
             lo, hi = sorted((max(0, row.likes_per_run_min), max(0, row.likes_per_run_max)))
-            pairs = act.pick_like_pairs(accounts, _recent_like_pairs(db, row.like_cooldown_hours),
+            # Первые дни аккаунт только смотрит: лайки у профиля без истории
+            # просмотров — отдельный повод присмотреться к нему.
+            warm = [a for a in accounts
+                    if act.likes_allowed(a.warmup_started_at or a.created_at, now,
+                                         after_day=row.warmup_likes_after_day,
+                                         enabled=row.warmup_enabled)]
+            pairs = act.pick_like_pairs(warm, _recent_like_pairs(db, row.like_cooldown_hours),
                                         rnd.randint(lo, hi), rnd)
             row.next_likes_at = act.next_likes_time(
                 now, interval_min=row.likes_interval_min,

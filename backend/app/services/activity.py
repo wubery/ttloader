@@ -95,14 +95,22 @@ def pick_like_pairs(accounts, recent_pairs, count: int, rnd: random.Random) -> l
     likers = pool[:]
     rnd.shuffle(likers)
     pairs: list[tuple] = []
+    chosen: set[tuple[int, int]] = set()
     for liker in likers:
         if len(pairs) >= count:
             break
         targets = [t for t in pool
-                   if t.id != liker.id and (liker.id, t.id) not in recent_pairs]
+                   if t.id != liker.id and (liker.id, t.id) not in recent_pairs
+                   # Взаимность в одном прогоне — самый заметный след фермы: два
+                   # аккаунта лайкают друг друга с разницей в минуты. Через сутки
+                   # ответный лайк уже выглядит обычно, поэтому ограничение живёт
+                   # только внутри прогона, а не на весь кулдаун.
+                   and (t.id, liker.id) not in chosen]
         if not targets:
             continue
-        pairs.append((liker, rnd.choice(targets)))
+        target = rnd.choice(targets)
+        chosen.add((liker.id, target.id))
+        pairs.append((liker, target))
     return pairs
 
 
@@ -128,8 +136,12 @@ def fit_into_window(moment: datetime, hour_from: int, hour_to: int,
         return moment
     day = moment.date() if moment.hour < hour_from else (moment + timedelta(days=1)).date()
     start = datetime.combine(day, datetime.min.time()).replace(hour=hour_from)
-    # Не в первую же минуту окна: иначе все аккаунты просыпаются одновременно
-    return start + timedelta(minutes=rnd.randint(0, 90))
+    # Точка внутри ВСЕГО окна, а не в его начале. Раньше сдвиг был 0–90 минут, и
+    # всё, что в окно не попало, сваливалось в первый его час: у панели с десятком
+    # аккаунтов получался ежедневный всплеск активности в одно и то же время —
+    # ровно тот признак фермы, от которого остальное расписание и уводит.
+    span_minutes = (hour_to - hour_from) * 60
+    return start + timedelta(minutes=rnd.randint(0, max(0, span_minutes - 1)))
 
 
 def next_activity_time(now: datetime, *, per_day_min: int, per_day_max: int,
@@ -156,6 +168,76 @@ def next_likes_time(now: datetime, *, interval_min: int, interval_max: int,
 def session_seconds(*, seconds_min: int, seconds_max: int, rnd: random.Random) -> int:
     lo, hi = sorted((max(5, seconds_min), max(5, seconds_max)))
     return rnd.randint(lo, hi)
+
+
+# --------------------------------------------------------------- разгон
+# Свежий аккаунт, который с первого же дня листает ленту по расписанию взрослого,
+# выглядит хуже, чем молчащий: живой человек раскачивается постепенно. Поэтому
+# нагрузка растёт линейно от доли `start_percent` в первый день до полной к
+# последнему дню разгона, а лайки включаются не сразу.
+
+
+def warmup_day(started_at: datetime | None, now: datetime) -> int:
+    """Какой это день прогрева, считая первый за единицу."""
+    if started_at is None:
+        return 1
+    return max(1, (now.date() - started_at.date()).days + 1)
+
+
+def warmup_factor(started_at: datetime | None, now: datetime, *, days: int,
+                  start_percent: int, enabled: bool = True) -> float:
+    """Доля полной нагрузки для этого аккаунта: от start_percent до 1.0."""
+    if not enabled or days <= 1:
+        return 1.0
+    day = warmup_day(started_at, now)
+    if day >= days:
+        return 1.0
+    start = min(100, max(1, start_percent)) / 100
+    return start + (1.0 - start) * (day - 1) / (days - 1)
+
+
+def scale_range(lo: int, hi: int, factor: float, *, floor: int = 1) -> tuple[int, int]:
+    """Сжимает диапазон настроек по коэффициенту разгона, не обнуляя его."""
+    lo, hi = sorted((lo, hi))
+    return max(floor, round(lo * factor)), max(floor, round(hi * factor))
+
+
+def likes_allowed(started_at: datetime | None, now: datetime, *, after_day: int,
+                  enabled: bool = True) -> bool:
+    """Дорос ли аккаунт до лайков.
+
+    Первые дни аккаунт только смотрит: лайки у профиля без истории просмотров —
+    отдельный повод для подозрений.
+    """
+    if not enabled:
+        return True
+    return warmup_day(started_at, now) >= max(1, after_day)
+
+
+# Дольше этого на одном ролике не задерживаемся, даже если он длинный: сессия
+# должна успеть охватить несколько роликов, иначе «просмотр ленты» вырождается в
+# один экран.
+MAX_DWELL_SECONDS = 120.0
+
+
+def watch_plan(duration: float, rnd: random.Random) -> tuple[float, str]:
+    """Сколько секунд смотреть ролик и как это назвать в журнале.
+
+    Раскладка приближена к живому зрителю: часть роликов бросают на первых
+    секундах, большинство досматривают, некоторые уходят на второй круг. Это не
+    украшение: доля досмотров — главный сигнал вовлечённости, который TikTok
+    считает по аккаунту. Прежняя версия держала на каждом ролике одинаковые 2–8
+    секунд независимо от его длины, то есть не досматривала вообще ничего и
+    полезного сигнала не давала совсем.
+    """
+    if duration <= 0:            # длительность ещё не подгрузилась
+        return rnd.uniform(4.0, 12.0), "без длительности"
+    roll = rnd.random()
+    if roll < 0.25:
+        return duration * rnd.uniform(0.15, 0.45), "бросил"
+    if roll < 0.80:
+        return duration * rnd.uniform(0.90, 1.05), "досмотрел"
+    return duration * rnd.uniform(1.6, 2.6), "пересмотрел"
 
 
 # ------------------------------------------------------------------- браузер
@@ -234,6 +316,33 @@ OWN_PROFILE_CHECK_JS = """() => {
 POST_LINKS_JS = """() => Array.from(document.querySelectorAll('a[href*="/video/"]'))
     .map((a) => a.href).slice(0, 40)"""
 
+# Длительность нужна от того ролика, который сейчас на экране: в ленте элементов
+# <video> несколько (соседние подгружены заранее), и первый попавшийся — не тот.
+ACTIVE_VIDEO_JS = """() => {
+    const vids = Array.from(document.querySelectorAll('video'));
+    if (!vids.length) return null;
+    const h = window.innerHeight || 1;
+    let best = null, bestVisible = -1;
+    for (const v of vids) {
+        const r = v.getBoundingClientRect();
+        const visible = Math.max(0, Math.min(r.bottom, h) - Math.max(r.top, 0));
+        if (visible > bestVisible) { bestVisible = visible; best = v; }
+    }
+    if (!best) return null;
+    const d = Number(best.duration);
+    return {duration: (isFinite(d) && d > 0) ? d : 0,
+            position: Number(best.currentTime) || 0};
+}"""
+
+# Комментарии только открываем и закрываем: ничего не пишем и не лайкаем.
+COMMENTS_OPEN_JS = """() => {
+    const btn = document.querySelector(
+        '[data-e2e="browse-comment"], [data-e2e="comment-icon"]');
+    if (!btn) return false;
+    (btn.closest('button') || btn).click();
+    return true;
+}"""
+
 
 class ActivityError(RuntimeError):
     """Аккаунт не смог выполнить действие: протухли куки, упал прокси и т.п."""
@@ -308,9 +417,53 @@ def discover_handle(account) -> str | None:
         _close(pw, browser)
 
 
+def _dwell(page, seconds: float, rnd: random.Random) -> None:
+    """Пережидает ролик, изредка двигая мышью: страница не должна выглядеть замершей."""
+    left = seconds
+    while left > 0:
+        step = min(left, rnd.uniform(1.5, 4.0))
+        page.wait_for_timeout(int(step * 1000))
+        left -= step
+        if rnd.random() < 0.2:
+            try:
+                page.mouse.move(rnd.randint(200, 900), rnd.randint(150, 700))
+            except Exception:  # noqa: BLE001 — жест необязательный
+                pass
+
+
+def _peek_comments(page, rnd: random.Random) -> None:
+    """Открывает панель комментариев и закрывает её. Только чтение."""
+    try:
+        if not page.evaluate(COMMENTS_OPEN_JS):
+            return
+        page.wait_for_timeout(int(rnd.uniform(2.0, 6.0) * 1000))
+        page.keyboard.press("Escape")
+    except Exception:  # noqa: BLE001 — вёрстка могла смениться, сессию не роняем
+        pass
+
+
+def _advance(page, rnd: random.Random, watched: int) -> None:
+    """Переход к следующему ролику: то колесом, то клавишей, изредка назад."""
+    if watched > 1 and rnd.random() < 0.10:
+        page.keyboard.press("ArrowUp")
+        return
+    if rnd.random() < 0.5:
+        try:
+            page.mouse.wheel(0, rnd.randint(500, 1200))
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    page.keyboard.press("ArrowDown")
+
+
 def browse_feed(account, seconds: int, rnd: random.Random | None = None,
                 log=lambda m: None) -> str:
-    """Смотрит ленту заданное число секунд: паузы, пролистывание, иногда назад.
+    """Смотрит ленту заданное число секунд, досматривая ролики по-человечески.
+
+    Ключевое отличие от простого пролистывания: сколько держать ролик, решает
+    `watch_plan` по его настоящей длительности, поэтому часть роликов
+    досматривается до конца и уходит в сигнал вовлечённости аккаунта. Переходы
+    чередуются между колесом и клавишами, изредка заглядываем в комментарии.
 
     Лайков здесь нет намеренно: в ленте попадаются чужие ролики и реклама, и
     единственный надёжный способ ничего лишнего не лайкнуть — не уметь этого.
@@ -321,18 +474,32 @@ def browse_feed(account, seconds: int, rnd: random.Random | None = None,
         page = ctx.new_page()
         page.goto(FEED_URL, wait_until="domcontentloaded", timeout=60_000)
         _check_logged_in(page)
+        page.wait_for_timeout(int(rnd.uniform(1.5, 4.0) * 1000))   # осмотреться
 
         deadline = _now_monotonic() + seconds
-        watched = 0
-        while _now_monotonic() < deadline:
-            page.wait_for_timeout(int(rnd.uniform(2.0, 8.0) * 1000))   # «досматриваем» ролик
-            if rnd.random() < 0.12 and watched:
-                page.keyboard.press("ArrowUp")                        # изредка возвращаемся
-            else:
-                page.keyboard.press("ArrowDown")
-                watched += 1
-        log(f"Просмотрено роликов: {watched}")
-        return f"лента {seconds} с, роликов {watched}"
+        watched = finished = again = 0
+        while True:
+            left = deadline - _now_monotonic()
+            if left <= 1.0:
+                break
+            try:
+                info = page.evaluate(ACTIVE_VIDEO_JS) or {}
+            except Exception:  # noqa: BLE001 — страница перерисовывается
+                info = {}
+            plan, kind = watch_plan(float(info.get("duration") or 0.0), rnd)
+            _dwell(page, min(plan, MAX_DWELL_SECONDS, left), rnd)
+            watched += 1
+            if kind == "досмотрел":
+                finished += 1
+            elif kind == "пересмотрел":
+                again += 1
+            if rnd.random() < 0.15 and deadline - _now_monotonic() > 8:
+                _peek_comments(page, rnd)
+            _advance(page, rnd, watched)
+
+        log(f"Просмотрено роликов: {watched}, из них досмотрено {finished}")
+        return (f"лента {seconds} с: роликов {watched}, "
+                f"досмотров {finished}, повторов {again}")
     finally:
         _close(pw, browser)
 

@@ -208,3 +208,175 @@ def test_version_flags_dead_updater(client):
     # в тестах апдейтера нет вовсе — значит и признаков жизни быть не должно
     assert body["updater_alive"] is False
     assert body["updater_seen"] is None
+
+
+# --- Разгон нового аккаунта ----------------------------------------------------
+# Смысл разгона в том, что свежий аккаунт работает не в полную силу. Проверяем
+# края шкалы: в первый день — заданная доля, к последнему — полная нагрузка.
+
+def test_warmup_starts_low_and_reaches_full():
+    start = datetime(2026, 9, 1, 10, 0)
+    first = act.warmup_factor(start, start, days=14, start_percent=25)
+    last = act.warmup_factor(start, start + timedelta(days=13), days=14, start_percent=25)
+    assert first == pytest.approx(0.25)
+    assert last == pytest.approx(1.0)
+
+
+def test_warmup_is_monotonic():
+    start = datetime(2026, 9, 1)
+    seen = [act.warmup_factor(start, start + timedelta(days=d), days=14, start_percent=25)
+            for d in range(20)]
+    assert seen == sorted(seen)
+    assert seen[-1] == 1.0
+
+
+def test_warmup_after_period_is_full():
+    start = datetime(2026, 9, 1)
+    assert act.warmup_factor(start, start + timedelta(days=99), days=14,
+                             start_percent=25) == 1.0
+
+
+def test_warmup_can_be_switched_off():
+    start = datetime(2026, 9, 1)
+    assert act.warmup_factor(start, start, days=14, start_percent=25, enabled=False) == 1.0
+
+
+def test_warmup_without_start_date_counts_first_day():
+    assert act.warmup_day(None, datetime(2026, 9, 10)) == 1
+
+
+def test_scaled_range_never_collapses_to_zero():
+    """Даже при сильном сжатии сессия остаётся осмысленной, а не нулевой."""
+    lo, hi = act.scale_range(180, 600, 0.05, floor=20)
+    assert lo >= 20 and hi >= lo
+
+
+def test_scaled_range_keeps_bounds_ordered():
+    assert act.scale_range(600, 180, 0.5) == act.scale_range(180, 600, 0.5)
+
+
+def test_likes_wait_for_the_account_to_settle():
+    start = datetime(2026, 9, 1, 12, 0)
+    assert not act.likes_allowed(start, start, after_day=4)
+    assert not act.likes_allowed(start, start + timedelta(days=2), after_day=4)
+    assert act.likes_allowed(start, start + timedelta(days=3), after_day=4)
+
+
+def test_likes_unrestricted_when_warmup_is_off():
+    start = datetime(2026, 9, 1)
+    assert act.likes_allowed(start, start, after_day=4, enabled=False)
+
+
+# --- Досмотр -------------------------------------------------------------------
+# Прежняя версия держала каждый ролик одинаковые 2–8 секунд и не досматривала
+# ничего. Проверяем, что теперь время считается от длины ролика.
+
+def test_watch_plan_scales_with_duration():
+    """Диапазоны пересекаются (короткий ролик можно пересмотреть), важна средняя."""
+    rnd = random.Random(0)
+    short = [act.watch_plan(5.0, rnd)[0] for _ in range(400)]
+    long = [act.watch_plan(60.0, rnd)[0] for _ in range(400)]
+    assert sum(long) / len(long) > 5 * sum(short) / len(short)
+
+
+def test_watch_plan_sometimes_finishes_the_video():
+    rnd = random.Random(1)
+    kinds = [act.watch_plan(20.0, rnd)[1] for _ in range(300)]
+    assert "досмотрел" in kinds
+    assert "пересмотрел" in kinds
+    assert "бросил" in kinds
+
+
+def test_watch_plan_survives_unknown_duration():
+    """Пока длительность не подгрузилась, всё равно нужна разумная пауза."""
+    rnd = random.Random(2)
+    for _ in range(50):
+        seconds, kind = act.watch_plan(0.0, rnd)
+        assert 3.0 <= seconds <= 13.0
+        assert kind == "без длительности"
+
+
+def test_browse_uses_the_plan_not_a_fixed_pause():
+    import inspect
+
+    src = inspect.getsource(act.browse_feed)
+    assert "watch_plan" in src
+    assert "ACTIVE_VIDEO_JS" in src
+
+
+# --- Расписание и лайки --------------------------------------------------------
+
+def test_sessions_spread_over_the_whole_window():
+    """Раньше всё, что не попало в окно, сваливалось в его первый час."""
+    rnd = random.Random(11)
+    now = datetime(2026, 9, 7, 23, 30)
+    hours = {act.next_activity_time(now, per_day_min=1, per_day_max=1,
+                                    hour_from=9, hour_to=23, rnd=rnd).hour
+             for _ in range(200)}
+    assert min(hours) >= 9 and max(hours) < 23
+    assert max(hours) >= 20          # добирается до конца окна
+    assert len(hours) >= 8           # а не толпится в одном часу
+
+
+def test_no_mutual_likes_within_one_run():
+    pool = [acc(1, "mine"), acc(2, "second")]
+    for seed in range(50):
+        pairs = act.pick_like_pairs(pool, set(), 2, random.Random(seed))
+        ids = {(liker.id, target.id) for liker, target in pairs}
+        assert not ({(1, 2), (2, 1)} <= ids), "аккаунты лайкнули друг друга в один прогон"
+
+
+def test_reciprocation_is_allowed_on_another_run():
+    """Ответный лайк через сутки — обычное поведение, запрещать его незачем."""
+    pool = [acc(1, "mine"), acc(2, "second")]
+    pairs = act.pick_like_pairs(pool, {(1, 2)}, 1, random.Random(3))
+    assert [(p[0].id, p[1].id) for p in pairs] == [(2, 1)]
+
+
+# --- Разгон через API ----------------------------------------------------------
+# Проверяем сквозь настоящую схему: колонки добавляются автомиграцией, и без неё
+# вкладка «Активность» упала бы на первом же запросе.
+
+def test_warmup_settings_round_trip(client):
+    saved = client.post("/api/activity/settings", json={
+        "warmup_enabled": True, "warmup_days": 10,
+        "warmup_start_percent": 30, "warmup_likes_after_day": 3,
+    })
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["warmup_days"] == 10 and body["warmup_start_percent"] == 30
+    assert client.get("/api/activity/settings").json()["warmup_likes_after_day"] == 3
+
+
+def test_warmup_settings_reject_nonsense(client):
+    assert client.post("/api/activity/settings",
+                       json={"warmup_start_percent": 0}).status_code == 400
+    assert client.post("/api/activity/settings",
+                       json={"warmup_days": 999}).status_code == 400
+
+
+def test_warmup_endpoint_reports_every_active_account(client):
+    created = client.post("/api/accounts", json={"name": "разгон", "platform": "tiktok"})
+    assert created.status_code in (200, 201), created.text
+    acc_id = created.json()["id"]
+
+    client.post("/api/activity/settings", json={
+        "warmup_enabled": True, "warmup_days": 14, "warmup_start_percent": 25,
+        "warmup_likes_after_day": 4})
+    rows = client.get("/api/activity/warmup").json()
+    mine = [r for r in rows if r["account_id"] == acc_id]
+    assert len(mine) == 1
+    row = mine[0]
+    assert row["day"] == 1 and row["days_total"] == 14
+    assert row["percent"] == 25          # первый день — стартовая доля
+    assert row["likes_allowed"] is False  # лайки только с четвёртого дня
+
+
+def test_warmup_can_be_restarted(client):
+    acc_id = client.post("/api/accounts",
+                         json={"name": "заново", "platform": "tiktok"}).json()["id"]
+    r = client.post(f"/api/activity/warmup/{acc_id}/restart")
+    assert r.status_code == 200, r.text
+    rows = {x["account_id"]: x for x in client.get("/api/activity/warmup").json()}
+    assert rows[acc_id]["started_at"] is not None
+    assert rows[acc_id]["day"] == 1

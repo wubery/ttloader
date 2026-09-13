@@ -206,6 +206,10 @@ class ActivitySettingsOut(BaseModel):
     like_cooldown_hours: int
     activity_max_concurrent: int
     next_likes_at: datetime | None = None
+    warmup_enabled: bool
+    warmup_days: int
+    warmup_start_percent: int
+    warmup_likes_after_day: int
 
 
 class ActivitySettingsUpdate(BaseModel):
@@ -223,6 +227,22 @@ class ActivitySettingsUpdate(BaseModel):
     likes_interval_max: int | None = None
     like_cooldown_hours: int | None = None
     activity_max_concurrent: int | None = None
+    warmup_enabled: bool | None = None
+    warmup_days: int | None = None
+    warmup_start_percent: int | None = None
+    warmup_likes_after_day: int | None = None
+
+
+class WarmupOut(BaseModel):
+    """Где аккаунт находится на шкале разгона — для вкладки «Активность»."""
+
+    account_id: int
+    account_name: str
+    day: int
+    days_total: int
+    percent: int
+    likes_allowed: bool
+    started_at: datetime | None = None
 
 
 class ActivityRunOut(BaseModel):

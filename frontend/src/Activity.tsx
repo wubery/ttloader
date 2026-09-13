@@ -6,7 +6,7 @@
  * и опознаются они по публичному нику, поэтому ник виден в каждой строке.
  */
 import { useEffect, useState } from "react";
-import { Account, ActivityRun, ActivitySettings, api } from "./api";
+import { Account, ActivityRun, ActivitySettings, Warmup, api } from "./api";
 
 /** Пара полей «от–до» — тот же вид, что у паузы между аккаунтами в форме поста. */
 function Range({ label, from, to, unit, min, max, onChange }: {
@@ -45,6 +45,25 @@ function Switch({ id, checked, label, onChange }: {
   );
 }
 
+/** Одно числовое поле — там, где диапазон «от–до» не нужен. */
+function Num({ label, value, unit, min, max, onChange }: {
+  label: string; value: number; unit?: string; min: number; max: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="d-flex align-items-center gap-2 flex-wrap mb-2">
+      <span className="fs-sm text-muted" style={{ minWidth: 190 }}>{label}</span>
+      <input className="form-control vp form-control-sm" type="number" style={{ width: 84 }}
+             min={min} max={max} value={value}
+             onChange={(e) => {
+               const n = Number(e.target.value);
+               onChange(Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : value);
+             }} />
+      {unit && <span className="fs-sm text-muted">{unit}</span>}
+    </div>
+  );
+}
+
 const STATUS_BADGE: Record<string, string> = {
   ok: "badge-vp-success", error: "badge-vp-danger", skipped: "badge-vp-muted",
 };
@@ -52,14 +71,17 @@ const STATUS_BADGE: Record<string, string> = {
 export function Activity({ accounts, onChange }: { accounts: Account[]; onChange: () => void }) {
   const [cfg, setCfg] = useState<ActivitySettings | null>(null);
   const [log, setLog] = useState<ActivityRun[]>([]);
+  const [warm, setWarm] = useState<Warmup[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
   async function reload() {
     try {
-      const [c, l] = await Promise.all([api.activitySettings(), api.activityLog(50)]);
-      setCfg(c); setLog(l);
+      const [c, l, w] = await Promise.all([
+        api.activitySettings(), api.activityLog(50), api.warmup(),
+      ]);
+      setCfg(c); setLog(l); setWarm(w);
     } catch (e: any) { setErr(e.message); }
   }
   useEffect(() => { reload(); }, []);
@@ -82,6 +104,16 @@ export function Activity({ accounts, onChange }: { accounts: Account[]; onChange
     setBusy(a.id); setErr(null); setMsg(null);
     try { await api.runActivity(a.id); setMsg(`«${a.name}»: просмотр запущен, следите за журналом`); }
     catch (e: any) { setErr(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function restartWarmup(a: Account) {
+    setBusy(a.id); setErr(null); setMsg(null);
+    try {
+      const r = await api.restartWarmup(a.id);
+      setMsg(r.detail || "Разгон начат заново");
+      setWarm(await api.warmup());
+    } catch (e: any) { setErr(e.message); }
     finally { setBusy(null); }
   }
 
@@ -155,6 +187,62 @@ export function Activity({ accounts, onChange }: { accounts: Account[]; onChange
         )}
       </div>
 
+      {cfg && (
+        <div className="vp-card">
+          <div className="vp-card-header">
+            <h3><i className="bi bi-thermometer-half me-2 text-accent" />Разгон новых аккаунтов</h3>
+            <button className="btn btn-vp btn-sm" onClick={save}>Сохранить</button>
+          </div>
+          <div className="row g-4">
+            <div className="col-md-6">
+              <Switch id="warmOn" checked={cfg.warmup_enabled} label="Плавно набирать нагрузку"
+                      onChange={(v) => patch({ warmup_enabled: v })} />
+              <Num label="длительность разгона" unit="дней" min={1} max={60}
+                   value={cfg.warmup_days}
+                   onChange={(v) => patch({ warmup_days: v })} />
+              <Num label="старт с доли нагрузки" unit="%" min={1} max={100}
+                   value={cfg.warmup_start_percent}
+                   onChange={(v) => patch({ warmup_start_percent: v })} />
+              <Num label="лайки начиная с дня" unit="" min={1} max={60}
+                   value={cfg.warmup_likes_after_day}
+                   onChange={(v) => patch({ warmup_likes_after_day: v })} />
+              <div className="form-text fs-sm">
+                Свежий аккаунт, который с первого дня работает по полному расписанию,
+                выглядит подозрительнее молчащего. Нагрузка растёт от указанной доли
+                до полной; первые дни аккаунт только смотрит ленту.
+              </div>
+            </div>
+            <div className="col-md-6">
+              {warm.length === 0
+                ? <div className="fs-sm text-muted">Нет активных аккаунтов.</div>
+                : (
+                  <div className="d-flex flex-column gap-2">
+                    {warm.map((w) => (
+                      <div key={w.account_id}>
+                        <div className="d-flex align-items-center gap-2 fs-sm">
+                          <b style={{ minWidth: 120 }}>{w.account_name}</b>
+                          <span className="text-muted">
+                            день {w.day} из {w.days_total}
+                          </span>
+                          <span className={`badge-vp ${w.percent >= 100
+                            ? "badge-vp-success" : "badge-vp-info"}`}>{w.percent}%</span>
+                          {!w.likes_allowed && (
+                            <span className="badge-vp badge-vp-muted">лайки позже</span>
+                          )}
+                        </div>
+                        <div className="progress mt-1" style={{ height: 4 }}>
+                          <div className="progress-bar" role="progressbar"
+                               style={{ width: `${Math.min(100, w.percent)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="vp-card">
         <div className="vp-card-header">
           <h3><i className="bi bi-people me-2 text-accent" />Аккаунты</h3>
@@ -188,6 +276,11 @@ export function Activity({ accounts, onChange }: { accounts: Account[]; onChange
                   : "ещё не заходил"}
               </span>
               <button className="btn btn-vp-outline btn-sm ms-auto" disabled={busy === a.id}
+                      onClick={() => restartWarmup(a)}
+                      title="Считать разгон заново — например, после смены прокси">
+                <i className="bi bi-arrow-counterclockwise me-1" />Разгон заново
+              </button>
+              <button className="btn btn-vp-outline btn-sm" disabled={busy === a.id}
                       onClick={() => discover(a)}>
                 <i className="bi bi-person-badge me-1" />Определить ник
               </button>

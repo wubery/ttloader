@@ -216,7 +216,19 @@ def _notify_result(db, job: Job, account, *, ok: bool) -> None:
         from .telegram import notify
 
         if not ok:
-            notify(f"❌ Пост не удался: {account.name} — задача #{job.id}\n{job.error}")
+            # Шесть одинаковых сообщений об одной задаче никому не нужны:
+            # говорим, будет ли повтор и когда
+            from .retry import MAX_ATTEMPTS, retry_delay, is_retryable
+
+            delay = retry_delay(job.attempts) if is_retryable(job.error) else None
+            if delay is not None:
+                tail = (f"\nПовтор {job.attempts + 1} из {MAX_ATTEMPTS} "
+                        f"через {int(delay.total_seconds() // 60)} мин.")
+            elif job.attempts >= MAX_ATTEMPTS:
+                tail = "\nПопытки исчерпаны — нужно вмешательство."
+            else:
+                tail = "\nПовтор не планируется: ошибка требует вмешательства."
+            notify(f"❌ Пост не удался: {account.name} — задача #{job.id}\n{job.error}{tail}")
         elif not job.group_id:
             notify(f"✅ Пост опубликован: {account.name} [{account.platform.value}] — задача #{job.id}")
 

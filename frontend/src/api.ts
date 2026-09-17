@@ -279,8 +279,19 @@ export interface Job {
   error: string | null;
   log: string;
   posted_url: string | null;
+  /** автоповтор: сколько попыток сделано и когда следующая */
+  attempts: number;
+  retry_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Счётчик исходов за день по аккаунту — то, что осталось от удалённых задач. */
+export interface JobStat {
+  day: string;
+  account_id: number;
+  done: number;
+  failed: number;
 }
 
 /**
@@ -711,5 +722,8 @@ export const api = {
       body: JSON.stringify(b),
     }).then((r) => j<{ jobs: Job[]; skipped: string[] }>(r)),
   retryJob: (id: number) => fetch(`/api/jobs/${id}/retry`, { method: "POST" }).then((r) => j<Job>(r)),
+  retryFailed: () =>
+    fetch("/api/jobs/retry-failed", { method: "POST" }).then((r) => j<{ ok: boolean; restarted: number }>(r)),
+  statsArchive: () => fetch("/api/stats/archive").then((r) => j<JobStat[]>(r)),
   deleteJob: (id: number) => fetch(`/api/jobs/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
 };

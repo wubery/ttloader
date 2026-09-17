@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import (Column, DateTime, Enum, Float, ForeignKey, Integer, String, Table,
+from sqlalchemy import (Column, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Table,
                         Text, UniqueConstraint, func)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -349,6 +349,24 @@ class Banner(Base):
     jobs: Mapped[list[Job]] = relationship(back_populates="banner")
 
 
+class JobStat(Base):
+    """Счётчик исходов по дням и аккаунтам.
+
+    Выполненные задачи чистятся через несколько дней, а статистика должна жить
+    дальше — поэтому исход задачи перед удалением складывается сюда, и панель
+    считает цифры как «живые задачи + счётчик».
+    """
+
+    __tablename__ = "job_stats"
+    __table_args__ = (UniqueConstraint("day", "account_id", name="uq_job_stats_day_acc"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    done: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
 class Job(Base):
     """Задача на постинг: видео + (опц.) баннер → аккаунт, в назначенное время."""
 
@@ -384,6 +402,10 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text, default=None)
     log: Mapped[str] = mapped_column(Text, default="")
     posted_url: Mapped[str | None] = mapped_column(String(500), default=None)
+    # Автоповтор после ошибки: сколько попыток уже сделано и когда следующая.
+    # Назначает планировщик, а не runner — см. services/retry.py.
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

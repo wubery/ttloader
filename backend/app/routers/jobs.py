@@ -122,6 +122,29 @@ def create_jobs_parts(payload: JobPartsCreate, db: Session = Depends(get_db)):
     return JobBulkOut(jobs=jobs, skipped=skipped)
 
 
+def _requeue(job: Job) -> None:
+    """Возвращает задачу в очередь как новую: счётчик автоповторов обнуляется —
+    ручной перезапуск это осознанное решение, а не шестая попытка."""
+    job.status = JobStatus.pending
+    job.error = None
+    job.scheduled_at = None
+    job.attempts = 0
+    job.retry_at = None
+
+
+@router.post("/retry-failed")
+def retry_failed(db: Session = Depends(get_db)):
+    """Перезапускает все упавшие задачи разом. Пул постинга сам ограничит
+    параллельность — в очередь они встают все сразу."""
+    jobs = db.query(Job).filter(Job.status == JobStatus.failed).all()
+    for job in jobs:
+        _requeue(job)
+    db.commit()
+    for job in jobs:
+        submit_job(job.id)
+    return {"ok": True, "restarted": len(jobs)}
+
+
 @router.post("/{job_id}/retry", response_model=JobOut)
 def retry_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
@@ -129,9 +152,7 @@ def retry_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Задача не найдена")
     if job.status in (JobStatus.rendering, JobStatus.uploading):
         raise HTTPException(400, "Задача уже выполняется")
-    job.status = JobStatus.pending
-    job.error = None
-    job.scheduled_at = None
+    _requeue(job)
     db.commit()
     db.refresh(job)
     submit_job(job.id)
@@ -170,9 +191,14 @@ def get_job_screenshot(job_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/{job_id}")
 def delete_job(job_id: int, db: Session = Depends(get_db)):
+    """Удаляет задачу. Исход завершённой уходит в счётчик статистики — иначе
+    ручная чистка очереди обнуляла бы цифры по ошибкам."""
+    from ..scheduler import archive_job
+
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(404, "Задача не найдена")
+    archive_job(db, job)          # и счётчик, и файлы (рендер + скриншоты)
     if job.output_filename:
         path = os.path.join(settings.output_dir, job.output_filename)
         if os.path.exists(path):

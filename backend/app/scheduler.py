@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from .config import settings
 from .db import SessionLocal
-from .models import Account, ActivityRun, Job, JobStatus
+from .models import Account, ActivityRun, Job, JobStat, JobStatus
 from .services.runner import run_job
 
 log = logging.getLogger(__name__)
@@ -57,10 +57,12 @@ def submit_job(job_id: int) -> None:
 
 
 def _poll_due_jobs() -> None:
-    """Раз в минуту: найти pending-задачи, у которых наступило время."""
+    """Раз в минуту: запустить pending-задачи, у которых наступило время, и
+    спланировать повторы упавших."""
     db = SessionLocal()
     try:
         now = datetime.now()
+        _schedule_retries(db, now)
         jobs = (
             db.query(Job)
             .filter(Job.status == JobStatus.pending)
@@ -71,6 +73,106 @@ def _poll_due_jobs() -> None:
                 continue
             if job.scheduled_at is None or job.scheduled_at <= now:
                 submit_job(job.id)
+    finally:
+        db.close()
+
+
+def _schedule_retries(db, now: datetime) -> None:
+    """Автоповтор упавших задач: 5 попыток через 5/10/15/30/60 минут.
+
+    Планирует именно планировщик: runner ставит failed в полудюжине мест, и
+    единая политика здесь надёжнее, чем правка каждого из них. Две фазы:
+    свежая ошибка получает время повтора, наступившее время возвращает задачу в
+    очередь. Фатальные ошибки (нет файла видео, аккаунт выключен) не повторяются.
+    """
+    from .services import retry
+
+    failed = db.query(Job).filter(Job.status == JobStatus.failed).all()
+    changed = False
+    for job in failed:
+        if job.retry_at is None:
+            if job.attempts >= retry.MAX_ATTEMPTS:
+                continue                                   # попытки исчерпаны
+            when = retry.schedule_retry(job.error, job.attempts, now)
+            if when is None:
+                # Помечаем, чтобы не перебирать эту задачу каждую минуту заново
+                job.attempts = retry.MAX_ATTEMPTS
+                job.log = (job.log or "") + "\nПовтор не планируется: ошибка требует вмешательства."
+                changed = True
+                continue
+            job.retry_at = when
+            n = job.attempts + 1
+            wait = int((when - now).total_seconds() // 60)
+            job.log = (job.log or "") + f"\nПовтор {n} из {retry.MAX_ATTEMPTS} через {wait} мин."
+            changed = True
+        elif job.retry_at <= now and job.id not in _inflight:
+            job.status = JobStatus.pending
+            job.attempts += 1
+            job.retry_at = None
+            job.error = None
+            job.scheduled_at = None
+            job.log = (job.log or "") + f"\nАвтоповтор {job.attempts} из {retry.MAX_ATTEMPTS}."
+            changed = True
+    if changed:
+        db.commit()
+
+
+def archive_job(db, job: Job) -> None:
+    """Складывает исход завершённой задачи в счётчик и удаляет её файлы.
+
+    Зовётся и уборщиком, и ручным удалением: иначе статистика ошибок обнулялась
+    бы каждой чисткой очереди руками. Незавершённые задачи в счётчик не идут.
+    """
+    import re
+
+    if job.status not in (JobStatus.done, JobStatus.failed):
+        return
+    day = (job.created_at or datetime.now()).date()
+    row = db.query(JobStat).filter(JobStat.day == day, JobStat.account_id == job.account_id).first()
+    if row is None:
+        row = JobStat(day=day, account_id=job.account_id)
+        db.add(row)
+    if job.status == JobStatus.done:
+        row.done = (row.done or 0) + 1
+    else:
+        row.failed = (row.failed or 0) + 1
+
+    # Рендер и скриншоты — имена скриншотов лежат в логе, как их и ищет
+    # get_job_screenshot в routers/jobs.py
+    names = []
+    if job.output_filename:
+        names.append(job.output_filename)
+    names += re.findall(r"tiktok_[a-z_]+_\d+\.png", f"{job.log or ''}\n{job.error or ''}")
+    for name in set(names):
+        path = os.path.join(settings.output_dir, name)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def _archive_old_jobs() -> int:
+    """Выполненные задачи старше jobs_keep_days уходят в счётчик и удаляются.
+
+    Упавшие не трогаем: ошибка — сигнал к действию, и исчезать сама она не должна.
+    """
+    keep = getattr(settings, "jobs_keep_days", 3)
+    if not keep or keep <= 0:
+        return 0
+    cutoff = datetime.now() - timedelta(days=keep)
+    db = SessionLocal()
+    try:
+        old = (db.query(Job)
+               .filter(Job.status == JobStatus.done, Job.updated_at < cutoff)
+               .all())
+        for job in old:
+            archive_job(db, job)
+            db.delete(job)
+        db.commit()
+        if old:
+            log.info("Очередь: выполненных задач ушло в счётчик — %s", len(old))
+        return len(old)
     finally:
         db.close()
 
@@ -366,6 +468,8 @@ def _cleanup_output() -> None:
             pass
     if removed:
         log.info("Очистка output_dir: удалено файлов — %s", removed)
+
+    _archive_old_jobs()
 
     # Заодно — брошенные куски незавершённых заливок (закрыли вкладку на середине).
     from .services.storage import cleanup_stale_parts

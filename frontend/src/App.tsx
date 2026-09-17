@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, createContext, useContext, useMemo } from "react";
 import {
-  api, Account, AccountGroup, AssetFolder, AutoLoginState, Banner, Job, LoginStage, MailConnect,
+  api, Account, AccountGroup, AssetFolder, JobStat, AutoLoginState, Banner, Job, LoginStage, MailConnect,
   MailConnectState,
   MailMessage, Platform, SettingsData, SystemVersion, UniqProfile, Video,
 } from "./api";
@@ -1541,23 +1541,45 @@ function Jobs({ jobs, accounts, videos, onChange }: {
   jobs: Job[]; accounts: Account[]; videos: Video[]; onChange: () => void;
 }) {
   const [showCount, setShowCount] = useState(20);
+  // Фильтр по статусу помним между заходами — как свёрнутое меню
+  const [statusFilter, setStatusFilter] = useState<Job["status"] | "all">(
+    () => (localStorage.getItem("vp_jobs_filter") as Job["status"] | "all") || "all");
+  useEffect(() => { localStorage.setItem("vp_jobs_filter", statusFilter); }, [statusFilter]);
   const toast = useToast();
   const { confirm } = useConfirm();
   const { query } = useContext(SearchCtx);
   const accName = (id: number) => accounts.find((a) => a.id === id)?.name ?? `#${id}`;
   const vidName = (id: number) => videos.find((v) => v.id === id)?.title ?? `#${id}`;
 
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { all: jobs.length };
+    for (const j of jobs) c[j.status] = (c[j.status] ?? 0) + 1;
+    return c;
+  }, [jobs]);
+
   const filtered = useMemo(() => {
-    if (!query) return jobs;
+    const byStatus = statusFilter === "all" ? jobs : jobs.filter((j) => j.status === statusFilter);
+    if (!query) return byStatus;
     const q = query.toLowerCase();
-    return jobs.filter((j) =>
+    return byStatus.filter((j) =>
       `#${j.id}`.includes(q) ||
       j.status.includes(q) ||
       accName(j.account_id).toLowerCase().includes(q) ||
       vidName(j.video_id).toLowerCase().includes(q) ||
       (j.caption || "").toLowerCase().includes(q)
     );
-  }, [jobs, query, accounts, videos]);
+  }, [jobs, query, accounts, videos, statusFilter]);
+
+  async function retryAllFailed() {
+    const n = counts.failed ?? 0;
+    if (!(await confirm("Перезапустить все ошибки?",
+      `${n} задач(и) вернутся в очередь и пойдут заново с первой попытки.`))) return;
+    try {
+      const r = await api.retryFailed();
+      toast.add("success", `Перезапущено: ${r.restarted}`);
+      onChange();
+    } catch (e: any) { toast.add("error", e.message); }
+  }
   const visible = filtered.slice(0, showCount);
 
   // Позиция задачи в пачке («группа · 2 из 5»), чтобы мультипост было видно в списке
@@ -1583,9 +1605,34 @@ function Jobs({ jobs, accounts, videos, onChange }: {
     failed: { label: "ошибка", dot: "fail", badge: "badge-vp-danger" },
   };
 
+  const FILTERS: { key: Job["status"] | "all"; label: string }[] = [
+    { key: "all", label: "Все" }, { key: "pending", label: "ожидает" },
+    { key: "rendering", label: "рендер" }, { key: "uploading", label: "постинг" },
+    { key: "done", label: "готово" }, { key: "failed", label: "ошибка" },
+  ];
+
   return (
     <div>
+      {jobs.length > 0 && (
+        <div className="d-flex align-items-center gap-2 flex-wrap mb-3">
+          {FILTERS.map((f) => (
+            <button key={f.key}
+              className={`btn btn-sm ${statusFilter === f.key ? "btn-vp" : "btn-vp-outline"}`}
+              onClick={() => { setStatusFilter(f.key); setShowCount(20); }}>
+              {f.label}<span className="ms-1 opacity-75">{counts[f.key] ?? 0}</span>
+            </button>
+          ))}
+          {(counts.failed ?? 0) > 0 && (
+            <button className="btn btn-vp-danger btn-sm ms-auto" onClick={retryAllFailed}>
+              <i className="bi bi-arrow-clockwise me-1" />Перезапустить все ошибки ({counts.failed})
+            </button>
+          )}
+        </div>
+      )}
       {jobs.length === 0 && <div className="vp-card text-center text-muted py-5"><i className="bi bi-inbox fs-1 d-block mb-2" />Пока нет задач. Создайте пост в «Новом посте».</div>}
+      {jobs.length > 0 && filtered.length === 0 && !query && (
+        <div className="vp-card text-center text-muted py-4">В этом статусе задач нет.</div>
+      )}
       {filtered.length === 0 && query && <div className="vp-card text-center text-muted py-4">Ничего не найдено по запросу «{query}»</div>}
       {visible.map((jb) => {
         const sc = statusConfig[jb.status];
@@ -1600,6 +1647,22 @@ function Jobs({ jobs, accounts, videos, onChange }: {
                 {jb.part_index && <span className="badge-vp badge-vp-info"><i className="bi bi-scissors me-1" />часть {jb.part_index}/{jb.part_total}</span>}
                 {jb.group_id && !jb.part_index && <span className="badge-vp badge-vp-muted"><i className="bi bi-collection me-1" />группа · {groupInfo.get(jb.id) ?? ""}</span>}
                 {jb.scheduled_at && <span className="badge-vp badge-vp-muted"><i className="bi bi-clock me-1" />{new Date(jb.scheduled_at).toLocaleString()}</span>}
+                {jb.status === "failed" && jb.retry_at && (
+                  <span className="badge-vp badge-vp-warning" title="автоповтор">
+                    <i className="bi bi-arrow-repeat me-1" />попытка {jb.attempts + 1} из 5 · повтор в{" "}
+                    {new Date(jb.retry_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
+                {jb.status === "failed" && !jb.retry_at && jb.attempts >= 5 && (
+                  <span className="badge-vp badge-vp-danger" title="автоповтор больше не запланирован">
+                    <i className="bi bi-x-octagon me-1" />попытки исчерпаны
+                  </span>
+                )}
+                {jb.status !== "failed" && jb.attempts > 0 && (
+                  <span className="badge-vp badge-vp-muted" title="это автоповтор">
+                    <i className="bi bi-arrow-repeat me-1" />повтор {jb.attempts}
+                  </span>
+                )}
               </div>
               <div className="d-flex gap-1">
                 {jb.status === "failed" && (
@@ -1914,9 +1977,16 @@ function ProxyManager({ accounts, onChange }: { accounts: Account[]; onChange: (
 function Stats({ jobs, accounts, videos, groups }: {
   jobs: Job[]; accounts: Account[]; videos: Video[]; groups: AccountGroup[];
 }) {
-  const total = jobs.length;
-  const done = jobs.filter((j) => j.status === "done").length;
-  const failed = jobs.filter((j) => j.status === "failed").length;
+  // Выполненные задачи чистятся через несколько дней, а их исход остаётся в
+  // счётчике на сервере — поэтому цифры считаются как «живые + архив».
+  const [archive, setArchive] = useState<JobStat[]>([]);
+  useEffect(() => { api.statsArchive().then(setArchive).catch(() => {}); }, [jobs.length]);
+  const archDone = archive.reduce((n, r) => n + r.done, 0);
+  const archFailed = archive.reduce((n, r) => n + r.failed, 0);
+
+  const total = jobs.length + archDone + archFailed;
+  const done = jobs.filter((j) => j.status === "done").length + archDone;
+  const failed = jobs.filter((j) => j.status === "failed").length + archFailed;
   const pending = jobs.filter((j) => j.status === "pending").length;
   const rendering = jobs.filter((j) => j.status === "rendering").length;
   const uploading = jobs.filter((j) => j.status === "uploading").length;
@@ -1933,11 +2003,16 @@ function Stats({ jobs, accounts, videos, groups }: {
       const created = new Date(j.created_at);
       return created >= d && created < next;
     });
+    // день архива приходит как YYYY-MM-DD — сравниваем по календарной дате
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const arch = archive.filter((r) => r.day === key);
+    const aDone = arch.reduce((n, r) => n + r.done, 0);
+    const aFailed = arch.reduce((n, r) => n + r.failed, 0);
     return {
       label: d.toLocaleDateString("ru", { weekday: "short", day: "numeric" }),
-      done: dayJobs.filter((j) => j.status === "done").length,
-      failed: dayJobs.filter((j) => j.status === "failed").length,
-      total: dayJobs.length,
+      done: dayJobs.filter((j) => j.status === "done").length + aDone,
+      failed: dayJobs.filter((j) => j.status === "failed").length + aFailed,
+      total: dayJobs.length + aDone + aFailed,
     };
   });
   const maxDay = Math.max(1, ...last7.map((d) => d.total));
@@ -1952,16 +2027,18 @@ function Stats({ jobs, accounts, videos, groups }: {
     ].map((row) => {
       const accs = accounts.filter((a) => (a.group_id ?? null) === row.id);
       const gj = jobs.filter((j) => (groupOf.get(j.account_id) ?? null) === row.id);
-      const gd = gj.filter((j) => j.status === "done").length;
-      const gf = gj.filter((j) => j.status === "failed").length;
+      const ga = archive.filter((r) => (groupOf.get(r.account_id) ?? null) === row.id);
+      const gd = gj.filter((j) => j.status === "done").length + ga.reduce((n, r) => n + r.done, 0);
+      const gf = gj.filter((j) => j.status === "failed").length + ga.reduce((n, r) => n + r.failed, 0);
+      const gt = gj.length + ga.reduce((n, r) => n + r.done + r.failed, 0);
       return {
-        ...row, accounts: accs.length, jobs: gj.length, done: gd, failed: gf,
-        rate: gj.length > 0 ? Math.round((gd / gj.length) * 100) : 0,
+        ...row, accounts: accs.length, jobs: gt, done: gd, failed: gf,
+        rate: gt > 0 ? Math.round((gd / gt) * 100) : 0,
       };
     });
     // строку «Без группы» показываем только если там что-то есть
     return rows.filter((r) => r.id !== null || r.accounts > 0 || r.jobs > 0);
-  }, [jobs, accounts, groups]);
+  }, [jobs, accounts, groups, archive]);
 
   // Accounts by platform
   const tiktok = accounts.filter((a) => a.platform === "tiktok").length;

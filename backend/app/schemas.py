@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -184,6 +184,18 @@ class SettingsUpdate(BaseModel):
     new_password: str | None = None
     ms_client_id: str | None = None   # Azure-приложение для чтения outlook-почты
     allow_shared_proxy: bool | None = None
+
+
+# ---------- Статистика ----------
+class JobStatOut(BaseModel):
+    """Счётчик исходов за день по аккаунту — то, что осталось от удалённых задач."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    day: date
+    account_id: int
+    done: int
+    failed: int
 
 
 # ---------- Активность ----------
@@ -500,6 +512,9 @@ class JobOut(BaseModel):
     posted_url: str | None
     created_at: datetime
     updated_at: datetime
+    # Автоповтор: сколько попыток сделано и когда следующая
+    attempts: int = 0
+    retry_at: datetime | None = None
 
 
 class JobBulkOut(BaseModel):

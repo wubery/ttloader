@@ -372,6 +372,8 @@ export interface SystemVersion {
   updater_seen?: number | null;
   /** апдейтер на хосте отвечает; false — обновление не начнётся вовсе */
   updater_alive?: boolean;
+  /** сколько секунд назад пополнялся журнал апдейтера (null — журнала нет) */
+  log_age?: number | null;
   update_status: string;
   update_requested: boolean;
   /** ok | auth_required (приватный репо без токена) | error | no_git | "" */

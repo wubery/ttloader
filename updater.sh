@@ -138,14 +138,32 @@ apply_token() {
 
 # git pull, работающий и когда у ветки не настроен upstream
 do_pull() {
-  local up br
+  local up br out rc
+  br="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
   up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
   if [ -n "$up" ]; then
-    git pull --ff-only
+    out="$(git pull --ff-only 2>&1)"; rc=$?
   else
-    br="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
-    git pull --ff-only origin "$br"
+    out="$(git pull --ff-only origin "$br" 2>&1)"; rc=$?
   fi
+  printf '%s
+' "$out"
+  [ "$rc" -eq 0 ] && return 0
+
+  # История на GitHub переписана (force-push): локальный HEAD туда больше не
+  # входит, и fast-forward невозможен. Для деплой-клона это не потеря — своих
+  # коммитов на сервере не бывает, а данные лежат в томе, .env и xray/config.json
+  # git не отслеживает. Поэтому при ЧИСТОМ рабочем дереве догоняем origin сами;
+  # с локальными правками — оставляем прежнее сообщение с инструкцией.
+  case "$out" in
+    *"fast-forward"*|*"diverged"*|*"unrelated histories"*)
+      if [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        echo "updater: история на GitHub переписана, сбрасываю на origin/$br"
+        git fetch origin "$br" 2>&1 && git reset --hard "origin/$br" 2>&1
+        return $?
+      fi ;;
+  esac
+  return "$rc"
 }
 
 ensure_git_safe
@@ -190,7 +208,9 @@ while true; do
       export VP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
       echo "updater: сборка с VP_COMMIT=$VP_COMMIT" >> update/updater.log
       # ${CF[@]+…} — чтобы пустой массив не спотыкался о set -u на старом bash
-      if $DC ${CF[@]+"${CF[@]}"} build --build-arg VP_COMMIT="$VP_COMMIT" >> update/updater.log 2>&1          && $DC ${CF[@]+"${CF[@]}"} up -d >> update/updater.log 2>&1; then
+      # timeout: зависшая сборка (npm без сети, OOM) раньше блокировала апдейтер
+      # навсегда — новые нажатия «Обновить» ставили флаг, который некому подхватить.
+      if timeout 45m $DC ${CF[@]+"${CF[@]}"} build --build-arg VP_COMMIT="$VP_COMMIT" >> update/updater.log 2>&1          && timeout 10m $DC ${CF[@]+"${CF[@]}"} up -d >> update/updater.log 2>&1; then
         write_version
         set_status "Обновлено успешно ($(cat update/version)) — $(date '+%F %T')"
         if self_changed; then
@@ -198,7 +218,12 @@ while true; do
           exec /usr/bin/env bash "$0"
         fi
       else
-        set_status "Ошибка пересборки (см. update/updater.log)"
+        rc=$?
+        if [ "$rc" -eq 124 ]; then
+          set_status "Ошибка: пересборка не уложилась в 45 минут и остановлена — см. журнал (обычно npm без сети или нехватка памяти)"
+        else
+          set_status "Ошибка пересборки (см. журнал обновления)"
+        fi
       fi
     else
       check_remote

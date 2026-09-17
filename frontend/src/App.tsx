@@ -2444,7 +2444,17 @@ function Settings() {
             <code className="ms-1">sudo systemctl restart vp-updater</code>
           </div>
         )}
-        {ver?.update_status && <p className="fs-sm text-muted mt-2 mb-0">Статус: {ver.update_status}</p>}
+        {ver?.update_status && (
+          <p className="fs-sm text-muted mt-2 mb-0">
+            Статус: {ver.update_status}
+            {/* Пересборка идёт, а журнал молчит — сборка, скорее всего, зависла */}
+            {ver.update_status.startsWith("Пересборка") && ver.log_age != null && ver.log_age > 300 && (
+              <span className="badge-vp badge-vp-warning ms-2">
+                <i className="bi bi-hourglass-split me-1" />журнал не обновлялся {Math.round(ver.log_age / 60)} мин
+              </span>
+            )}
+          </p>
+        )}
         <div className="mt-2">
           <button className="btn btn-link btn-sm p-0 fs-sm" onClick={async () => {
             if (upLog) { setUpLog(null); return; }

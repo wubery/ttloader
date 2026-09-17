@@ -75,6 +75,8 @@ def version():
     running = os.environ.get("VP_COMMIT", "unknown")
     stamps = [t for t in (_mtime(n) for n in UPDATER_HEARTBEAT_FILES) if t]
     seen_ago = round(time.time() - max(stamps)) if stamps else None
+    log_stamp = _mtime("updater.log")
+    log_age = round(time.time() - log_stamp) if log_stamp else None
     try:
         behind = int(_read("behind", "0") or 0)
     except ValueError:
@@ -93,6 +95,9 @@ def version():
         # Без этого «Запрошено обновление…» висит вечно и молча.
         "updater_seen": seen_ago,
         "updater_alive": seen_ago is not None and seen_ago < UPDATER_SILENCE_SECONDS,
+        # Сколько секунд назад журнал апдейтера пополнялся: при статусе «Пересборка…»
+        # и молчащем журнале сборка, скорее всего, зависла
+        "log_age": log_age,
         "update_status": _read("status", ""),
         "update_requested": os.path.exists(os.path.join(UPDATE_DIR, "requested")),
         # ok | auth_required (приватный репо без токена) | error | no_git | "" (нет апдейтера)

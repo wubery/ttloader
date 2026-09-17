@@ -1614,6 +1614,12 @@ function Jobs({ jobs, accounts, videos, onChange }: {
             </div>
             {jb.caption && <div className="vp-job-caption">{jb.caption}</div>}
             {jb.error && <div className="vp-job-error"><i className="bi bi-exclamation-triangle me-1" />{jb.error}</div>}
+            {/* Ссылка на опубликованный ролик: она уже с ником автора, иначе TikTok отдаёт 404 */}
+            {jb.posted_url && (
+              <a className="btn btn-vp-outline btn-sm mt-2 me-2" href={jb.posted_url} target="_blank" rel="noreferrer">
+                <i className="bi bi-box-arrow-up-right me-1" />Открыть ролик
+              </a>
+            )}
             {/* Скриншот страницы TikTok в момент разбора — иначе неудачу не посмотреть */}
             {/tiktok_[a-z_]+_\d+\.png/.test(`${jb.log ?? ""}${jb.error ?? ""}`) && (
               <a className="btn btn-vp-outline btn-sm mt-2" href={`/api/jobs/${jb.id}/screenshot`} target="_blank" rel="noreferrer">

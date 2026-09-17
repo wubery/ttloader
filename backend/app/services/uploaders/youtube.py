@@ -39,6 +39,7 @@ def upload_youtube(
     proxy: ProxyConfig | None,
     headless: bool = True,
     log=lambda m: None,
+    handle: str | None = None,   # общий параметр загрузчиков; здесь не нужен
 ) -> UploadResult:
     require_cookies(cookies_path)
     try:

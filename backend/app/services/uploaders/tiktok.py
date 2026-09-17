@@ -26,6 +26,11 @@ from .base import (
 
 UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=upload"
 UPLOAD_URL_FALLBACK = "https://www.tiktok.com/upload?lang=en"
+# Раздел «Контент» студии: там перечислены свои ролики, и ссылки на них TikTok
+# печатает в рабочей форме /@ник/video/<id>. Это наш источник ника для ссылки.
+CONTENT_URL = "https://www.tiktok.com/tiktokstudio/content"
+CONTENT_LINKS_JS = """() => Array.from(document.querySelectorAll('a[href*="/video/"]'))
+    .map((a) => a.href).slice(0, 60)"""
 
 # Селекторы (могут потребовать актуализации)
 FILE_INPUT = 'input[type="file"]'
@@ -116,7 +121,15 @@ def upload_tiktok(
     proxy: ProxyConfig | None,
     headless: bool = True,
     log=lambda m: None,
+    handle: str | None = None,
 ) -> UploadResult:
+    """Публикует видео в TikTok.
+
+    `handle` — уже известный ник аккаунта. Нужен только для ссылки на ролик:
+    адрес без ника (/video/<id>) TikTok отдаёт как 404. Если ник не передан,
+    загрузчик выясняет его сам и возвращает в UploadResult.handle, чтобы
+    вызывающий код сохранил его в аккаунт.
+    """
     require_cookies(cookies_path)
     try:
         from playwright.sync_api import sync_playwright
@@ -245,7 +258,12 @@ def upload_tiktok(
             except Exception:  # noqa: BLE001
                 page.wait_for_timeout(5_000)
             _screenshot(page, "publish_ok", log=_log)
-            return UploadResult(ok=True, url=_find_posted_url(publish_responses), log="\n".join(lines))
+            posted_url, acc_handle = _resolve_posted_url(
+                page, publish_responses, handle=handle, log=_log)
+            if posted_url:
+                _log(f"Ссылка на ролик: {posted_url}")
+            return UploadResult(ok=True, url=posted_url, handle=acc_handle,
+                                log="\n".join(lines))
         except UploadError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -478,15 +496,110 @@ def _wait_publish_confirmed(page, responses: list, log=lambda m: None, timeout_m
     return False, f"за {timeout_ms // 1000}с не пришло ни ответа API, ни перехода на «Контент»"
 
 
-def _find_posted_url(responses: list) -> str | None:
-    """Достаёт id опубликованного видео из ответа API, если он там есть."""
+def _publish_video_id(responses: list) -> str | None:
+    """id опубликованного ролика из ответа API публикации."""
     import re
 
     for _status, _url, body in responses:
         m = re.search(r'"(?:aweme_id|item_id|video_id)"\s*:\s*"?(\d{6,})"?', body or "")
         if m:
-            return f"https://www.tiktok.com/video/{m.group(1)}"
+            return m.group(1)
     return None
+
+
+def _content_links(page, want_id: str | None, log=lambda m: None,
+                   timeout_ms: int = 20_000) -> dict[str, tuple[str, str]]:
+    """{id ролика: (ник, ссылка)} из раздела «Контент» студии.
+
+    Это лучший источник ссылки: TikTok сам печатает там адреса своих роликов в
+    рабочей форме /@ник/video/<id>, и ник в них заведомо наш — гадать не нужно.
+    Свежий ролик появляется в списке не мгновенно, поэтому ждём его появления.
+    """
+    from ..tiktok_links import parse_video_link, video_url
+
+    found: dict[str, tuple[str, str]] = {}
+    waited = 0
+    step = 4_000
+    while True:
+        try:
+            if "/tiktokstudio/content" not in (page.url or ""):
+                page.goto(CONTENT_URL, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(3_000)
+            hrefs = page.evaluate(CONTENT_LINKS_JS) or []
+        except Exception as e:  # noqa: BLE001 — студия не открылась, ссылку возьмём иначе
+            log(f"Не удалось прочитать раздел «Контент»: {e}")
+            return found
+        for href in hrefs:
+            parsed = parse_video_link(href)
+            if not parsed or not parsed[0]:
+                continue
+            handle, video_id = parsed
+            found.setdefault(video_id, (handle, video_url(handle, video_id)))
+        if not want_id or want_id in found or waited >= timeout_ms:
+            return found
+        # ролик ещё обрабатывается — перезагружаем список
+        page.wait_for_timeout(step)
+        waited += step
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=45_000)
+        except Exception:  # noqa: BLE001
+            return found
+
+
+def _own_handle_from_page(page, log=lambda m: None) -> str | None:
+    """Ник аккаунта из состояния страницы студии (тот же разбор, что в «Определить ник»)."""
+    try:
+        from ..activity import OWN_PROFILE_JS, parse_handle
+
+        return parse_handle(page.evaluate(OWN_PROFILE_JS))
+    except Exception as e:  # noqa: BLE001
+        log(f"Ник по странице студии определить не удалось: {e}")
+        return None
+
+
+def _resolve_posted_url(page, responses: list, handle: str | None = None,
+                        log=lambda m: None) -> tuple[str | None, str | None]:
+    """Ссылка на опубликованный ролик и ник аккаунта, если его удалось узнать.
+
+    Ссылка обязана содержать ник: https://www.tiktok.com/video/<id> TikTok
+    отдаёт как 404, работает только https://www.tiktok.com/@<ник>/video/<id>.
+    id есть в ответе API публикации, ника там нет — поэтому ник берётся из
+    аккаунта, а если его там нет, из раздела «Контент» студии.
+
+    Второй элемент — ник для сохранения в аккаунт. Он возвращается ТОЛЬКО когда
+    получен из ссылок на свои же ролики: по нику панель решает, чьи посты можно
+    лайкать (services/activity), и неподтверждённому нику там не место.
+    """
+    from ..activity import parse_handle
+    from ..tiktok_links import video_url
+
+    video_id = _publish_video_id(responses)
+    if not video_id:
+        log("В ответах TikTok не нашлось id ролика — ссылку составить не из чего.")
+
+    known = parse_handle(handle)
+    if known and video_id:
+        return video_url(known, video_id), None
+
+    links = _content_links(page, video_id, log=log)
+    if links:
+        exact = links.get(video_id or "")
+        # ник у всех своих роликов один, так что для него годится любая ссылка
+        acc_handle = exact[0] if exact else next(iter(links.values()))[0]
+        log(f"Ник аккаунта по разделу «Контент»: @{acc_handle}")
+        if exact:
+            return exact[1], acc_handle
+        return (video_url(acc_handle, video_id) if video_id else None), acc_handle
+
+    if known:
+        return None, None
+    # «Контент» не открылся: для ссылки сойдёт ник из состояния страницы, но в
+    # аккаунт он не пойдёт — он не подтверждён.
+    guessed = _own_handle_from_page(page, log=log)
+    if not guessed:
+        log("Ник аккаунта выяснить не удалось — ссылка на ролик не сохранена.")
+        return None, None
+    return (video_url(guessed, video_id) if video_id else None), None
 
 
 def _screenshot(page, tag: str, log=lambda m: None) -> str | None:

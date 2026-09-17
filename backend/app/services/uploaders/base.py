@@ -132,6 +132,10 @@ class UploadResult:
     url: str | None = None
     log: str = ""
     error: str | None = None
+    # Ник аккаунта, если загрузчик его выяснил по ходу дела (TikTok). Нужен для
+    # ссылки на ролик: без ника адрес /video/<id> отдаёт 404. Вызывающий код
+    # сохраняет ник в аккаунт, чтобы в следующий раз не искать заново.
+    handle: str | None = None
 
 
 class UploadError(RuntimeError):

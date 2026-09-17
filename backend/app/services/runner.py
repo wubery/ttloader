@@ -24,6 +24,33 @@ def _append_log(job: Job, msg: str) -> None:
     job.log = (job.log or "") + f"[{stamp}] {msg}\n"
 
 
+def _remember_handle(account, db, handle: str | None, log) -> None:
+    """Сохраняет ник аккаунта, выясненный загрузчиком, и починяет старые ссылки.
+
+    Ник нужен ссылке на ролик: адрес без него (/video/<id>) TikTok отдаёт как
+    404. Раз ник стал известен, тем же ником дозаполняются ссылки прошлых задач
+    этого аккаунта. Уже заданный ник не перезаписываем: он мог быть вписан
+    вручную, а по нику решается, чьи посты панель имеет право лайкать.
+    """
+    from .activity import parse_handle
+    from .tiktok_links import repair_job_urls
+
+    new = parse_handle(handle)
+    if not new or account.tiktok_handle:
+        return
+    account.tiktok_handle = new
+    db.commit()
+    log(f"Запомнил ник аккаунта: @{new}")
+    try:
+        fixed = repair_job_urls(db, account_id=account.id)
+    except Exception as e:  # noqa: BLE001 — починка ссылок не должна ронять задачу
+        db.rollback()
+        log(f"Не удалось обновить ссылки прошлых задач: {e}")
+        return
+    if fixed:
+        log(f"Дописал ник в ссылки прошлых задач: {fixed}")
+
+
 def _ensure_session(account, db, log) -> bool:
     """Проверяет куки и при необходимости выполняет автоматический вход.
 
@@ -426,12 +453,14 @@ def run_job(job_id: int) -> None:
             proxy=proxy,
             headless=settings.headless,
             log=_live_log,
+            handle=account.tiktok_handle,
         )
         # result.log сюда не дописываем: те же строки уже легли через _live_log
 
         if result.ok:
             job.status = JobStatus.done
             job.posted_url = result.url
+            _remember_handle(account, db, result.handle, _live_log)
             _append_log(job, "Задача выполнена успешно." + (f" Ссылка: {result.url}" if result.url else ""))
         else:
             job.status = JobStatus.failed

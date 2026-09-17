@@ -20,10 +20,32 @@ from .services.security import verify_session
 _OPEN_PREFIXES = ("/api/auth/", "/api/health")
 
 
+def _repair_tiktok_links() -> None:
+    """Дописывает ник в старые ссылки на ролики TikTok (jobs.posted_url).
+
+    До появления ника в ссылке сохранялась форма /video/<id>, которую TikTok
+    отдаёт как 404. Разовая починка при старте: где ник аккаунта известен —
+    ссылка становится рабочей, где нет — остаётся как была.
+    """
+    from .services.tiktok_links import repair_job_urls
+
+    db = SessionLocal()
+    try:
+        fixed = repair_job_urls(db)
+        if fixed:
+            print(f"[links] Исправлено ссылок на ролики TikTok: {fixed}", flush=True)
+    except Exception as e:  # noqa: BLE001 — панель должна подняться в любом случае
+        db.rollback()
+        print(f"[links] Не удалось починить ссылки: {e}", flush=True)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     bootstrap_settings()
+    _repair_tiktok_links()
     start_scheduler()
     telegram.start_bot()
     yield

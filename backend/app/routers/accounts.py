@@ -25,7 +25,7 @@ from ..schemas import (
     MailMessageOut,
     ProxyCheckOut,
 )
-from ..services import activity, auto_login, mail
+from ..services import activity, auto_login, mail, tiktok_links
 from ..services.crypto import encrypt
 from ..services.login_session import LOGIN_URLS, login_manager
 from ..services.uploaders.base import (
@@ -195,6 +195,9 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
     _apply_activity(acc, payload)
     _apply_credentials(acc, payload)
     db.commit()
+    if acc.tiktok_handle:
+        # Ник вписали руками — старым ссылкам на ролики он тоже нужен (иначе 404)
+        tiktok_links.repair_job_urls(db, account_id=acc.id)
     db.refresh(acc)
     return acc
 
@@ -265,6 +268,9 @@ def discover_handle(account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Ссылку на профиль найти не удалось — впишите ник вручную")
     acc.tiktok_handle = handle
     db.commit()
+    # Ник узнали — дозаполняем им ссылки прошлых публикаций этого аккаунта:
+    # без ника адрес /video/<id> отдаёт 404.
+    tiktok_links.repair_job_urls(db, account_id=acc.id)
     db.refresh(acc)
     return acc
 

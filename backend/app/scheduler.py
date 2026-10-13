@@ -93,11 +93,11 @@ def _schedule_retries(db, now: datetime) -> None:
         if job.retry_at is None:
             if job.attempts >= retry.MAX_ATTEMPTS:
                 continue                                   # попытки исчерпаны
-            when = retry.schedule_retry(job.error, job.attempts, now)
+            when, why = retry.schedule_retry_for(job.error, job.log, job.attempts, now)
             if when is None:
                 # Помечаем, чтобы не перебирать эту задачу каждую минуту заново
                 job.attempts = retry.MAX_ATTEMPTS
-                job.log = (job.log or "") + "\nПовтор не планируется: ошибка требует вмешательства."
+                job.log = (job.log or "") + "\n" + (why or "Попытки исчерпаны.")
                 changed = True
                 continue
             job.retry_at = when
@@ -479,6 +479,21 @@ def _cleanup_output() -> None:
         log.info("Очистка недозалитых кусков: удалено файлов — %s", stale)
 
 
+def _daily_backup() -> None:
+    """Раз в сутки — архив базы, кук и ключа (см. services/backup.py)."""
+    from .services.backup import make_backup
+
+    try:
+        log.info("Резервная копия: %s", make_backup())
+    except Exception as e:  # noqa: BLE001 — копия не должна ронять планировщик
+        log.error("Резервная копия не сделана: %s", e)
+        try:
+            from .services.telegram import notify
+            notify(f"⚠️ Резервная копия панели не сделана: {e}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(_poll_due_jobs, "interval", seconds=60, id="poll_due_jobs",
                        replace_existing=True, max_instances=1)
@@ -492,6 +507,9 @@ def start_scheduler() -> None:
                        replace_existing=True, max_instances=1)
     _scheduler.add_job(_activity_tick, "interval", seconds=ACTIVITY_TICK_SECONDS,
                        id="activity_tick", replace_existing=True, max_instances=1)
+    _scheduler.add_job(_daily_backup, "interval", hours=24, id="daily_backup",
+                       replace_existing=True, max_instances=1,
+                       next_run_time=datetime.now() + timedelta(minutes=10))
     _scheduler.start()
 
 

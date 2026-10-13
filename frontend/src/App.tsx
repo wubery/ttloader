@@ -2208,6 +2208,50 @@ function Stats({ jobs, accounts, videos, groups }: {
 /* ================================================================
    Settings
    ================================================================ */
+/** Резервные копии: база, куки и ключ шифрования. Делаются раз в сутки сами. */
+function BackupsCard() {
+  const [list, setList] = useState<{ name: string; size: number; created_at: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const load = () => api.backups().then(setList).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  async function make() {
+    setBusy(true);
+    try { const r = await api.makeBackup(); toast.add("success", `Копия готова: ${r.name}`); load(); }
+    catch (e: any) { toast.add("error", e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="vp-card">
+      <div className="vp-card-header">
+        <h3><i className="bi bi-safe me-2 text-accent" />Резервные копии</h3>
+        <button className="btn btn-vp btn-sm" disabled={busy} onClick={make}>
+          {busy ? "Делаю…" : "Сделать копию сейчас"}
+        </button>
+      </div>
+      <p className="fs-sm text-muted">
+        База, куки аккаунтов и ключ шифрования — раз в сутки, хранятся последние 7. Видео не входят:
+        их можно залить заново, а куки — нет. <b>В архиве есть ключ</b>, поэтому он равноценен
+        паролям — храните его так же.
+      </p>
+      {list.length === 0 && <div className="fs-sm text-muted">Копий пока нет.</div>}
+      <div className="d-flex flex-column gap-1">
+        {list.map((b) => (
+          <div key={b.name} className="d-flex align-items-center gap-2 fs-sm">
+            <span className="text-muted" style={{ minWidth: 150 }}>{new Date(b.created_at).toLocaleString("ru")}</span>
+            <span className="text-muted">{(b.size / 1024 / 1024).toFixed(1)} МБ</span>
+            <a className="btn btn-vp-outline btn-sm" href={api.backupUrl(b.name)}>
+              <i className="bi bi-download me-1" />Скачать
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Settings() {
   const [s, setS] = useState<SettingsData | null>(null);
   const [token, setToken] = useState("");
@@ -2392,6 +2436,8 @@ function Settings() {
           </div>
         )}
       </div>
+
+      <BackupsCard />
 
       {/* Update */}
       <div className="vp-card">

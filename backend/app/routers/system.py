@@ -9,10 +9,34 @@ from __future__ import annotations
 import os
 import time
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..services import backup
+
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+
+@router.get("/backups")
+def list_backups():
+    return backup.list_backups()
+
+
+@router.post("/backups")
+def create_backup():
+    try:
+        return {"ok": True, "name": backup.make_backup()}
+    except Exception as e:  # noqa: BLE001 — причину отдаём в панель, а не пятисотку
+        raise HTTPException(500, f"Копию сделать не удалось: {e}") from e
+
+
+@router.get("/backups/{name}")
+def download_backup(name: str):
+    path = backup.backup_path(name)
+    if path is None:
+        raise HTTPException(404, "Копия не найдена")
+    return FileResponse(path, media_type="application/gzip", filename=name)
 
 UPDATE_DIR = os.environ.get("UPDATE_DIR", "/update")
 

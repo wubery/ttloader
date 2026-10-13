@@ -156,11 +156,23 @@ def issue_login_code() -> str:
     return "ok"
 
 
+# Неверных вводов подряд, после которых все выданные коды сгорают: иначе
+# шестизначный код за 5 минут жизни можно было перебирать без ограничений.
+MAX_CODE_FAILURES = 5
+_code_failures = 0
+
+
 def check_login_code(code: str) -> bool:
+    global _code_failures
     exp = _login_codes.get(code)
     if exp and exp >= time.time():
         _login_codes.pop(code, None)
+        _code_failures = 0
         return True
+    _code_failures += 1
+    if _code_failures >= MAX_CODE_FAILURES:
+        _login_codes.clear()
+        _code_failures = 0
     # чистим протухшие
     for c in [c for c, e in _login_codes.items() if e < time.time()]:
         _login_codes.pop(c, None)

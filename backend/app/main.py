@@ -41,10 +41,38 @@ def _repair_tiktok_links() -> None:
         db.close()
 
 
+def _recover_interrupted_jobs() -> None:
+    """Задачи, которые шли в момент перезапуска, переводит в «ошибку».
+
+    Каждое обновление перезапускает бэкенд, и задача, рендерившаяся в этот
+    момент, навсегда оставалась в rendering/uploading: автоповтор берёт только
+    failed, а планировщик активности считал её аккаунт занятым и молча
+    пропускал его просмотры и лайки. Теперь такая задача становится ошибкой
+    «прервано перезапуском», и её подхватывает обычный автоповтор.
+    """
+    from .models import Job, JobStatus
+
+    db = SessionLocal()
+    try:
+        stuck = db.query(Job).filter(
+            Job.status.in_([JobStatus.rendering, JobStatus.uploading])).all()
+        for job in stuck:
+            was = job.status.value
+            job.status = JobStatus.failed
+            job.error = f"Прервано перезапуском панели (было: {was})"
+            job.log = (job.log or "") + f"\nПрервано перезапуском панели на этапе {was}."
+        if stuck:
+            db.commit()
+            print(f"[jobs] Прерванных перезапуском задач: {len(stuck)}", flush=True)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     bootstrap_settings()
+    _recover_interrupted_jobs()
     _repair_tiktok_links()
     start_scheduler()
     telegram.start_bot()

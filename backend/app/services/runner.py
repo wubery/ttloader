@@ -218,10 +218,14 @@ def _notify_result(db, job: Job, account, *, ok: bool) -> None:
         if not ok:
             # Шесть одинаковых сообщений об одной задаче никому не нужны:
             # говорим, будет ли повтор и когда
-            from .retry import MAX_ATTEMPTS, retry_delay, is_retryable
+            from .retry import MAX_ATTEMPTS, is_retryable, publish_attempted, retry_delay
 
-            delay = retry_delay(job.attempts) if is_retryable(job.error) else None
-            if delay is not None:
+            maybe_posted = publish_attempted(job.log)
+            delay = (retry_delay(job.attempts)
+                     if is_retryable(job.error) and not maybe_posted else None)
+            if maybe_posted:
+                tail = "\nПубликация могла пройти — автоповтора не будет, проверьте профиль."
+            elif delay is not None:
                 tail = (f"\nПовтор {job.attempts + 1} из {MAX_ATTEMPTS} "
                         f"через {int(delay.total_seconds() // 60)} мин.")
             elif job.attempts >= MAX_ATTEMPTS:

@@ -448,6 +448,10 @@ export const api = {
   // system
   systemVersion: () => fetch("/api/system/version").then((r) => j<SystemVersion>(r)),
   systemUpdate: () => fetch("/api/system/update", { method: "POST" }).then((r) => j<any>(r)),
+  backups: () =>
+    fetch("/api/system/backups").then((r) => j<{ name: string; size: number; created_at: string }[]>(r)),
+  makeBackup: () => fetch("/api/system/backups", { method: "POST" }).then((r) => j<{ name: string }>(r)),
+  backupUrl: (name: string) => `/api/system/backups/${encodeURIComponent(name)}`,
   updateLog: (lines = 80) =>
     fetch(`/api/system/update-log?lines=${lines}`)
       .then((r) => j<{ lines: string[]; detail: string }>(r)),

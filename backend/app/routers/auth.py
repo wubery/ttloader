@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..schemas import AuthMeOut, LoginIn, TelegramCodeIn
-from ..services import telegram
+from ..services import ratelimit, telegram
 from ..services.appsettings import get_settings_row
 from ..services.security import sign_session, verify_password, verify_session
 
@@ -16,9 +16,21 @@ COOKIE = "vp_session"
 _MAX_AGE = 30 * 24 * 3600
 
 
-def _set_session(response: Response, username: str, secret: str) -> None:
+def _is_https(request: Request | None) -> bool:
+    """Пришёл ли запрос по HTTPS — напрямую или через прокси (Cloudflare, nginx)."""
+    if request is None:
+        return False
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+    return proto.split(",")[0].strip() == "https"
+
+
+def _set_session(response: Response, username: str, secret: str,
+                 request: Request | None = None) -> None:
     token = sign_session(username, secret, ttl_seconds=_MAX_AGE)
-    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=_MAX_AGE, path="/")
+    # Secure — только при HTTPS: по голому http://IP:8088 cookie с этим флагом
+    # браузер просто не сохранил бы, и вход в домашней сети сломался бы.
+    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=_MAX_AGE,
+                        path="/", secure=_is_https(request))
 
 
 @router.get("/me", response_model=AuthMeOut)
@@ -32,12 +44,26 @@ def me(request: Request, db: Session = Depends(get_db)):
     )
 
 
+def _guard(request: Request) -> str:
+    key = ratelimit.client_key(request)
+    wait = ratelimit.retry_after(key)
+    if wait:
+        raise HTTPException(
+            429, f"Слишком много неудачных попыток входа. Повторите через {wait // 60 + 1} мин.",
+            headers={"Retry-After": str(wait)},
+        )
+    return key
+
+
 @router.post("/login")
-def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
+def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    key = _guard(request)
     row = get_settings_row(db)
     if payload.username != row.admin_user or not verify_password(payload.password, row.admin_pass_hash):
+        ratelimit.fail(key)
         raise HTTPException(401, "Неверный логин или пароль")
-    _set_session(response, row.admin_user, row.session_secret)
+    ratelimit.reset(key)
+    _set_session(response, row.admin_user, row.session_secret, request)
     return {"ok": True}
 
 
@@ -68,9 +94,13 @@ def telegram_request():
 
 
 @router.post("/telegram/verify")
-def telegram_verify(payload: TelegramCodeIn, response: Response, db: Session = Depends(get_db)):
+def telegram_verify(payload: TelegramCodeIn, request: Request, response: Response,
+                    db: Session = Depends(get_db)):
+    key = _guard(request)
     if not telegram.check_login_code(payload.code):
+        ratelimit.fail(key)
         raise HTTPException(401, "Неверный или просроченный код")
+    ratelimit.reset(key)
     row = get_settings_row(db)
-    _set_session(response, row.admin_user, row.session_secret)
+    _set_session(response, row.admin_user, row.session_secret, request)
     return {"ok": True}

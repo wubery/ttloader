@@ -41,3 +41,33 @@ def schedule_retry(error: str | None, attempts: int, now: datetime) -> datetime 
         return None
     delay = retry_delay(attempts)
     return now + delay if delay else None
+
+
+# Маркер, который загрузчик пишет в лог прямо перед нажатием «Опубликовать».
+PUBLISH_MARKER = "Публикую…"
+_ATTEMPT_MARKER = "Автоповтор "
+
+
+def publish_attempted(log: str | None) -> bool:
+    """Дошла ли ПОСЛЕДНЯЯ попытка до нажатия «Опубликовать».
+
+    Если да, повторять автоматически нельзя: TikTok мог принять ролик, а
+    панель — не дождаться подтверждения, и повтор выложит дубль. Смотрим
+    только хвост лога после последнего автоповтора — прошлые попытки не в счёт.
+    """
+    text = log or ""
+    cut = text.rfind(_ATTEMPT_MARKER)
+    tail = text[cut:] if cut >= 0 else text
+    return PUBLISH_MARKER in tail
+
+
+def schedule_retry_for(error: str | None, log: str | None, attempts: int,
+                       now: datetime) -> tuple[datetime | None, str]:
+    """Как schedule_retry, но с причиной отказа для лога задачи."""
+    if publish_attempted(log):
+        return None, ("Повтор не планируется: публикация могла пройти — проверьте "
+                      "профиль и, если ролика нет, перезапустите вручную.")
+    if not is_retryable(error):
+        return None, "Повтор не планируется: ошибка требует вмешательства."
+    when = schedule_retry(error, attempts, now)
+    return when, ""

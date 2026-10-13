@@ -14,6 +14,20 @@ connect_args = (
 )
 
 engine = create_engine(settings.database_url, connect_args=connect_args, future=True)
+
+if settings.database_url.startswith("sqlite"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record) -> None:
+        """WAL: читатели не ждут писателя, а писателей в панели много — пул
+        постинга, потоки активности, планировщик, бот и HTTP. В режиме журнала
+        по умолчанию любая запись блокирует всю базу, и с ростом числа
+        аккаунтов это кончается «database is locked»."""
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")   # в WAL это безопасно и быстрее FULL
+        cur.close()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 

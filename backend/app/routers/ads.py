@@ -66,7 +66,7 @@ async def upload_ad(
 @router.get("/{ad_id}/file")
 def get_ad_file(ad_id: int, db: Session = Depends(get_db)):
     ad = db.get(AdClip, ad_id)
-    if hook is None:
+    if ad is None:
         raise HTTPException(404, "Рекламный ролик не найден")
     path = os.path.join(settings.ads_dir, ad.filename)
     if not os.path.exists(path):
@@ -77,7 +77,7 @@ def get_ad_file(ad_id: int, db: Session = Depends(get_db)):
 @router.delete("/{ad_id}")
 def delete_ad(ad_id: int, db: Session = Depends(get_db)):
     ad = db.get(AdClip, ad_id)
-    if hook is None:
+    if ad is None:
         raise HTTPException(404, "Рекламный ролик не найден")
     path = os.path.join(settings.ads_dir, ad.filename)
     if os.path.exists(path):

@@ -54,7 +54,7 @@ def _validate_proxy(proxy_url: str) -> None:
     try:
         parse_proxy(proxy_url)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 def _ensure_proxy_unique(db: Session, proxy_url: str, exclude_id: int | None = None) -> None:
@@ -229,7 +229,7 @@ async def upload_cookies(account_id: int, file: UploadFile = File(...), db: Sess
     try:
         data = json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise HTTPException(400, "Файл кук должен быть JSON (storage_state или массив cookies)")
+        raise HTTPException(400, "Файл кук должен быть JSON (storage_state или массив cookies)") from None
 
     if isinstance(data, list) or (isinstance(data, dict) and "cookies" in data):
         # Нормализуем: чиним sameSite/expires из экспортов расширений под Playwright.
@@ -352,9 +352,9 @@ async def login_credentials(account_id: int, payload: LoginCredentialsIn, db: Se
             password=payload.password,
         )
     except UploadError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Ошибка входа: {e}")
+        raise HTTPException(500, f"Ошибка входа: {e}") from e
     if result.get("storage_state") is not None:
         _apply_saved_state(acc, db, result["storage_state"])
     return _stage_out(result)
@@ -374,7 +374,7 @@ def login_auto(account_id: int, db: Session = Depends(get_db)):
     try:
         auto_login.start(acc.id)
     except UploadError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     return auto_login.get_state(acc.id)
 
 
@@ -391,7 +391,7 @@ def mail_connect(account_id: int, db: Session = Depends(get_db)):
     try:
         return mail.start_device_code(acc, db)
     except mail.MailError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 @router.get("/{account_id}/mail/connect/state", response_model=MailConnectStateOut)
@@ -405,7 +405,7 @@ def mail_list(account_id: int, limit: int = 20, db: Session = Depends(get_db)):
     try:
         messages = mail.list_messages(acc, db, limit=limit)
     except mail.MailError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return [
         MailMessageOut(
             id=m.id, sender=m.sender, subject=m.subject, received_at=m.received_at, preview=m.preview
@@ -420,7 +420,7 @@ def mail_body(account_id: int, msg_id: str, db: Session = Depends(get_db)):
     try:
         return {"body": mail.get_body(acc, db, msg_id)}
     except mail.MailError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 @router.post("/{account_id}/mail/code", response_model=MailCodeOut)
@@ -430,7 +430,7 @@ def mail_code(account_id: int, db: Session = Depends(get_db)):
     try:
         code = mail.find_login_code(acc, db)
     except mail.MailError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return MailCodeOut(code=code, message=None if code else "Свежих писем с кодом не нашлось.")
 
 
@@ -458,9 +458,9 @@ async def login_code(account_id: int, payload: LoginCodeIn, db: Session = Depend
     try:
         result = await login_manager.submit_code(account_id, payload.code)
     except UploadError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Ошибка подтверждения кода: {e}")
+        raise HTTPException(500, f"Ошибка подтверждения кода: {e}") from e
     if result.get("storage_state") is not None:
         _apply_saved_state(acc, db, result["storage_state"])
     return _stage_out(result)

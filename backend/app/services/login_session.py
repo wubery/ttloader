@@ -155,7 +155,7 @@ class LoginManager:
                 stage = await self._detect_stage()
             except Exception as e:  # noqa: BLE001
                 await self._teardown()
-                raise UploadError(f"Не удалось начать вход: {e}")
+                raise UploadError(f"Не удалось начать вход: {e}") from e
 
             self._account_id = account_id
             self._account_name = account_name
@@ -177,7 +177,7 @@ class LoginManager:
                     await self._page.keyboard.press("Enter")
                 stage = await self._detect_stage()
             except Exception as e:  # noqa: BLE001
-                raise UploadError(f"Не удалось подтвердить код: {e}")
+                raise UploadError(f"Не удалось подтвердить код: {e}") from e
             return await self._stage_result(stage)
 
     async def _stage_result(self, stage: str) -> dict:

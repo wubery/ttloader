@@ -98,3 +98,10 @@ def test_legacy_plain_token_is_migrated(client, db):
     assert db.get(AppSettings, 1).tg_bot_token.startswith(PREFIX)
     db.get(AppSettings, 1).tg_bot_token = None
     db.commit()
+
+
+def test_ad_file_and_delete_do_not_crash(client):
+    """Регресс: в ads.py проверялась несуществующая переменная hook — любой
+    запрос файла рекламы и удаление падали с NameError (500). Нашёл ruff F821."""
+    assert client.get("/api/ads/999999/file").status_code == 404
+    assert client.delete("/api/ads/999999").status_code == 404

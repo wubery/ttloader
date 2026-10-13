@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     # Внешние бинарники
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
+    # adb для тестовой заливки через эмулятор/телефон (вкладка «Эмулятор»)
+    adb_bin: str = "adb"
 
     # Playwright: показывать окно браузера при постинге (удобно для отладки)
     headless: bool = True

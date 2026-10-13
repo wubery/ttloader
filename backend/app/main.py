@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from .config import settings
 from .db import SessionLocal, init_db
-from .routers import (account_groups, accounts, activity, ads, asset_folders, auth,
+from .routers import (account_groups, accounts, activity, ads, asset_folders, auth, emulator,
                       backgrounds, banners, hooks, jobs, overlays,
                       settings as settings_router, stats, system, uniq_profiles, videos)
 from .scheduler import shutdown_scheduler, start_scheduler
@@ -124,6 +124,7 @@ app.include_router(overlays.router)
 app.include_router(uniq_profiles.router)
 app.include_router(jobs.router)
 app.include_router(stats.router)
+app.include_router(emulator.router)
 
 
 @app.get("/api/health")

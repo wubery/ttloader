@@ -317,6 +317,14 @@ export class ApiError extends Error {
   }
 }
 
+export interface EmuDevice {
+  serial: string; model: string; android: string; emulator: boolean; tiktok_package: string | null;
+}
+export interface EmuResult {
+  ok: boolean; state: "post" | "editor" | "login" | "other_app" | "unknown";
+  steps: string[]; screenshot: string; texts: string[]; device: EmuDevice;
+}
+
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
     let detail = r.statusText;
@@ -736,5 +744,12 @@ export const api = {
   retryFailed: () =>
     fetch("/api/jobs/retry-failed", { method: "POST" }).then((r) => j<{ ok: boolean; restarted: number }>(r)),
   statsArchive: () => fetch("/api/stats/archive").then((r) => j<JobStat[]>(r)),
+  emuDevice: (addr: string) =>
+    fetch("/api/emulator/device", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addr }) }).then((r) => j<EmuDevice>(r)),
+  emuTestUpload: (addr: string, video_id: number, go_to_post: boolean) =>
+    fetch("/api/emulator/test-upload", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addr, video_id, go_to_post }) }).then((r) => j<EmuResult>(r)),
+  emuShotUrl: (name: string) => `/api/emulator/screenshot/${encodeURIComponent(name)}`,
   deleteJob: (id: number) => fetch(`/api/jobs/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
 };

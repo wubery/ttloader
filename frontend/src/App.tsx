@@ -10,12 +10,13 @@ import { Activity } from "./Activity";
 import { Uniqueizer } from "./Uniqueizer";
 import { Jobs } from "./Jobs";
 import { Stats } from "./Stats";
+import { Emulator } from "./Emulator";
 import { ConfirmProvider, GROUP_FALLBACK, SearchCtx, ThemeCtx, ThemeProvider, ToastProvider, useConfirm, useToast } from "./ui";
 
 /* ================================================================
    Tab type
    ================================================================ */
-type Tab = "jobs" | "post" | "editor" | "accounts" | "videos" | "banners" | "uniq" | "activity" | "proxy" | "stats" | "settings";
+type Tab = "jobs" | "post" | "editor" | "accounts" | "videos" | "banners" | "uniq" | "activity" | "proxy" | "stats" | "emulator" | "settings";
 
 const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
   { tab: "jobs", icon: "bi-clipboard2-data", label: "Очередь" },
@@ -28,6 +29,7 @@ const NAV_ITEMS: { tab: Tab; icon: string; label: string }[] = [
   { tab: "activity", icon: "bi-activity", label: "Активность" },
   { tab: "proxy", icon: "bi-shield-check", label: "Прокси" },
   { tab: "stats", icon: "bi-bar-chart-line", label: "Статистика" },
+  { tab: "emulator", icon: "bi-phone", label: "Эмулятор" },
   { tab: "settings", icon: "bi-gear", label: "Настройки" },
 ];
 
@@ -35,7 +37,7 @@ const TAB_LABELS: Record<Tab, string> = {
   jobs: "Очередь", post: "Новый пост", editor: "Редактор", accounts: "Аккаунты",
   activity: "Активность",
   videos: "Видео", banners: "Баннеры", uniq: "Уникализация",
-  proxy: "Прокси", stats: "Статистика", settings: "Настройки",
+  proxy: "Прокси", stats: "Статистика", emulator: "Эмулятор", settings: "Настройки",
 };
 
 /* ================================================================
@@ -276,6 +278,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             {tab === "activity" && <Activity accounts={accounts} onChange={refreshAll} />}
             {tab === "proxy" && <ProxyManager accounts={accounts} onChange={refreshAll} />}
             {tab === "stats" && <Stats jobs={jobs} accounts={accounts} videos={videos} groups={groups} />}
+            {tab === "emulator" && <Emulator videos={videos} />}
             {tab === "settings" && <Settings />}
           </SearchCtx.Provider>
         </div>

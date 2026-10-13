@@ -3,8 +3,9 @@ FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
 WORKDIR /app
 
-# ffmpeg для наложения баннера; fonts-dejavu-core — шрифт для текстовых слоёв (drawtext)
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+# ffmpeg для наложения баннера; fonts-dejavu-core — шрифт для текстовых слоёв (drawtext);
+# adb — тестовая заливка через эмулятор/телефон (вкладка «Эмулятор»)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core adb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

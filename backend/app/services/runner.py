@@ -19,9 +19,18 @@ from .uploaders import get_uploader, parse_proxy
 from .uploaders.base import UploadError
 
 
+# Потолок лога задачи. С автоповторами лог растёт вшестеро, а хранится в строке
+# БД; режем голову — хвост с последней попыткой важнее (по нему же
+# retry.publish_attempted решает, можно ли повторять).
+MAX_LOG_CHARS = 20_000
+
+
 def _append_log(job: Job, msg: str) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
-    job.log = (job.log or "") + f"[{stamp}] {msg}\n"
+    log = (job.log or "") + f"[{stamp}] {msg}\n"
+    if len(log) > MAX_LOG_CHARS:
+        log = "…(начало лога обрезано)\n" + log[-MAX_LOG_CHARS:]
+    job.log = log
 
 
 def _remember_handle(account, db, handle: str | None, log) -> None:

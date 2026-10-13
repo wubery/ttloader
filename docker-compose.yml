@@ -8,6 +8,15 @@ services:
     restart: unless-stopped
     # tini как pid 1 — «пожинает» дочерние процессы Chromium (иначе копятся zombie)
     init: true
+    # Зависший бэкенд виден в `docker compose ps` как unhealthy. Сам docker
+    # compose такой контейнер НЕ перезапускает — restart срабатывает только на
+    # выход процесса; это сигнал для глаз и для внешнего мониторинга.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=20); sys.exit(0)"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
     environment:
       # Часовой пояс планировщика
       TIMEZONE: Europe/Moscow

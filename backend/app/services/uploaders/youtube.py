@@ -65,7 +65,7 @@ def upload_youtube(
             _log(f"Запуск браузера через прокси {proxy.server}")
         browser = p.chromium.launch(**stealth_launch_kwargs(proxy, headless=headless))
         try:
-            context = browser.new_context(storage_state=load_storage_state(cookies_path), **stealth_context_kwargs())
+            context = browser.new_context(storage_state=load_storage_state(cookies_path), **stealth_context_kwargs(browser=browser))
             context.add_init_script(STEALTH_INIT_JS)
             page = context.new_page()
             _log("Открываю YouTube Studio…")

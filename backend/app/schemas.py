@@ -515,6 +515,10 @@ class JobOut(BaseModel):
     # Автоповтор: сколько попыток сделано и когда следующая
     attempts: int = 0
     retry_at: datetime | None = None
+    # Список очереди опрашивается раз в 4 секунды, поэтому лог в нём — только
+    # хвост; целиком — GET /api/jobs/{id}/log
+    log_truncated: bool = False
+    has_screenshot: bool = False
 
 
 class JobBulkOut(BaseModel):

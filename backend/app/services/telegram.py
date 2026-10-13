@@ -78,7 +78,10 @@ def _settings() -> tuple[str | None, list[str], bool]:
     db = SessionLocal()
     try:
         row = get_settings_row(db)
-        return row.tg_bot_token, parse_chat_ids(row.tg_chat_id), row.tg_login_enabled
+        from .crypto import decrypt
+
+        # токен хранится зашифрованным; старый открытый decrypt отдаёт как есть
+        return decrypt(row.tg_bot_token), parse_chat_ids(row.tg_chat_id), row.tg_login_enabled
     finally:
         db.close()
 

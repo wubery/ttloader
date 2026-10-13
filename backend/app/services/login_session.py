@@ -135,7 +135,7 @@ class LoginManager:
                 self._browser = await self._pw.chromium.launch(
                     **stealth_launch_kwargs(proxy, headless=True)
                 )
-                self._context = await self._browser.new_context(**stealth_context_kwargs())
+                self._context = await self._browser.new_context(**stealth_context_kwargs(browser=self._browser))
                 await self._context.add_init_script(STEALTH_INIT_JS)
                 self._page = await self._context.new_page()
                 url = LOGIN_URLS.get(platform, "about:blank")

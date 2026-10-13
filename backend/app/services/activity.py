@@ -366,7 +366,7 @@ def _session(account):
     pw = sync_playwright().start()
     browser = pw.chromium.launch(**stealth_launch_kwargs(proxy, headless=True))
     ctx = browser.new_context(
-        storage_state=load_storage_state(account.cookies_path), **stealth_context_kwargs())
+        storage_state=load_storage_state(account.cookies_path), **stealth_context_kwargs(browser=browser))
     ctx.add_init_script(STEALTH_INIT_JS)
     return pw, browser, ctx
 

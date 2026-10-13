@@ -268,6 +268,28 @@ def _account_busy(account_id: int) -> bool:
         db.close()
 
 
+_activity_lock = threading.Lock()
+
+
+def _claim_account(account_id: int) -> bool:
+    """Атомарно занимает куки аккаунта под фоновую активность.
+
+    Раньше проверка «занят?» и пометка «занят» шли двумя шагами без блокировки,
+    и тик с кнопкой «Проверить сейчас» могли одновременно пройти проверку —
+    два Chromium на одних куках. Теперь между ними никто не вклинится.
+    """
+    with _activity_lock:
+        if _account_busy(account_id):
+            return False
+        _activity_busy.add(account_id)
+        return True
+
+
+def _release_account(account_id: int) -> None:
+    with _activity_lock:
+        _activity_busy.discard(account_id)
+
+
 def _log_activity(account_id: int, kind: str, status: str, detail: str,
                   target_id: int | None = None) -> None:
     db = SessionLocal()
@@ -287,11 +309,10 @@ def run_browse(account_id: int) -> None:
     from .services import activity as act
     from .services.appsettings import get_settings_row
 
-    if _account_busy(account_id):
+    if not _claim_account(account_id):
         _log_activity(account_id, "browse", "skipped", "аккаунт занят публикацией или входом")
         return
 
-    _activity_busy.add(account_id)
     try:
         with _activity_slots:
             db = SessionLocal()
@@ -339,18 +360,17 @@ def run_browse(account_id: int) -> None:
             except Exception:  # noqa: BLE001
                 pass
     finally:
-        _activity_busy.discard(account_id)
+        _release_account(account_id)
 
 
 def run_like(liker_id: int, target_id: int) -> None:
     """Один лайк: аккаунт панели отмечает пост другого аккаунта панели."""
     from .services import activity as act
 
-    if _account_busy(liker_id):
+    if not _claim_account(liker_id):
         _log_activity(liker_id, "like", "skipped", "аккаунт занят", target_id)
         return
 
-    _activity_busy.add(liker_id)
     try:
         with _activity_slots:
             db = SessionLocal()
@@ -370,7 +390,7 @@ def run_like(liker_id: int, target_id: int) -> None:
                 db.close()
         _log_activity(liker_id, "like", status, detail, target_id)
     finally:
-        _activity_busy.discard(liker_id)
+        _release_account(liker_id)
 
 
 def _recent_like_pairs(db, cooldown_hours: int) -> set[tuple[int, int]]:

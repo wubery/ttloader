@@ -44,6 +44,12 @@ def bootstrap_settings() -> None:
                 row.admin_pass_hash = hash_password(pw)
                 print(f"[appsettings] Сгенерирован пароль администратора: {pw}", flush=True)
                 print("[appsettings] Логин: " + row.admin_user, flush=True)
+        # Токен бота, сохранённый до появления шифрования, шифруем на месте —
+        # один раз, при первом старте новой версии.
+        from .crypto import PREFIX, encrypt
+
+        if row.tg_bot_token and not row.tg_bot_token.startswith(PREFIX):
+            row.tg_bot_token = encrypt(row.tg_bot_token)
         db.commit()
     finally:
         db.close()

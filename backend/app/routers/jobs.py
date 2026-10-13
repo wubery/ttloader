@@ -5,7 +5,7 @@ import os
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -18,9 +18,39 @@ from ..scheduler import submit_job
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
+LIST_LOG_TAIL = 1500
+_SCREENSHOT_RE = re.compile(r"tiktok_[a-z_]+_\d+\.png")
+
+
+def _list_item(job: Job) -> JobOut:
+    """Задача для списка: хвост лога вместо всего лога.
+
+    Фронт опрашивает очередь раз в 4 секунды, а лог каждой задачи растёт с
+    каждым автоповтором — отдавать его целиком значило гонять мегабайты.
+    """
+    item = JobOut.model_validate(job)
+    full = job.log or ""
+    item.has_screenshot = bool(_SCREENSHOT_RE.search(f"{full}\n{job.error or ''}"))
+    if len(full) > LIST_LOG_TAIL:
+        cut = full[-LIST_LOG_TAIL:]
+        nl = cut.find("\n")
+        item.log = cut[nl + 1:] if 0 <= nl < 200 else cut   # не обрезать строку посередине
+        item.log_truncated = True
+    return item
+
+
 @router.get("", response_model=list[JobOut])
 def list_jobs(db: Session = Depends(get_db)):
-    return db.query(Job).order_by(Job.id.desc()).all()
+    return [_list_item(j) for j in db.query(Job).order_by(Job.id.desc()).all()]
+
+
+@router.get("/{job_id}/log", response_class=PlainTextResponse)
+def job_log(job_id: int, db: Session = Depends(get_db)):
+    """Полный лог задачи — для «Весь лог» в карточке."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(404, "Задача не найдена")
+    return job.log or ""
 
 
 @router.get("/{job_id}", response_model=JobOut)

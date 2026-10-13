@@ -1684,7 +1684,7 @@ function Jobs({ jobs, accounts, videos, onChange }: {
               </a>
             )}
             {/* Скриншот страницы TikTok в момент разбора — иначе неудачу не посмотреть */}
-            {/tiktok_[a-z_]+_\d+\.png/.test(`${jb.log ?? ""}${jb.error ?? ""}`) && (
+            {jb.has_screenshot && (
               <a className="btn btn-vp-outline btn-sm mt-2" href={`/api/jobs/${jb.id}/screenshot`} target="_blank" rel="noreferrer">
                 <i className="bi bi-image me-1" />Скриншот страницы TikTok
               </a>
@@ -1692,6 +1692,11 @@ function Jobs({ jobs, accounts, videos, onChange }: {
             {jb.log && (
               <details className="vp-job-log">
                 <summary className="fs-sm text-muted" style={{ cursor: "pointer" }}>Показать лог</summary>
+                {jb.log_truncated && (
+                  <a className="fs-sm d-block mb-1" href={`/api/jobs/${jb.id}/log`} target="_blank" rel="noreferrer">
+                    показаны последние строки — открыть весь лог
+                  </a>
+                )}
                 <pre>{jb.log}</pre>
               </details>
             )}

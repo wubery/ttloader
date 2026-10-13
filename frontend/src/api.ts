@@ -282,6 +282,9 @@ export interface Job {
   /** автоповтор: сколько попыток сделано и когда следующая */
   attempts: number;
   retry_at: string | null;
+  /** в списке лог — только хвост; целиком — /api/jobs/{id}/log */
+  log_truncated?: boolean;
+  has_screenshot?: boolean;
   created_at: string;
   updated_at: string;
 }

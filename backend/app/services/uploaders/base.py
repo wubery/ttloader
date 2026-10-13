@@ -108,10 +108,30 @@ def stealth_launch_kwargs(proxy: "ProxyConfig | None", *, headless: bool) -> dic
     return kwargs
 
 
-def stealth_context_kwargs(*, no_viewport: bool = False, timezone_id: str = "Europe/Moscow") -> dict:
+def user_agent_for(browser=None) -> str:
+    """User-Agent с версией, совпадающей с настоящим движком браузера.
+
+    Жёстко прописанная «Chrome/132» расходилась с реальным Chromium: pip ставил
+    другую версию Playwright, а с ней и другой движок. Сайт видит версию не
+    только в заголовке — в navigator.userAgentData, в наборе API, — и несовпадение
+    само по себе признак автоматизации. Поэтому версия берётся из запущенного
+    браузера; без него — прежняя строка.
+    """
+    if browser is not None:
+        try:
+            major = str(browser.version).split(".")[0]
+            if major.isdigit():
+                return STEALTH_USER_AGENT.replace("Chrome/132.0.0.0", f"Chrome/{major}.0.0.0")
+        except Exception:  # noqa: BLE001 — версия не прочиталась: лучше прежний UA, чем падение
+            pass
+    return STEALTH_USER_AGENT
+
+
+def stealth_context_kwargs(*, no_viewport: bool = False, timezone_id: str = "Europe/Moscow",
+                           browser=None) -> dict:
     """Готовые аргументы для browser.new_context(**...) с маскировкой."""
     kwargs: dict = {
-        "user_agent": STEALTH_USER_AGENT,
+        "user_agent": user_agent_for(browser),
         "locale": "ru-RU",
         "timezone_id": timezone_id,
         "is_mobile": False,
@@ -248,7 +268,7 @@ def cookies_alive(platform: str, cookies_path: str | None, proxy_url: str | None
         browser = p.chromium.launch(**stealth_launch_kwargs(proxy, headless=True))
         try:
             ctx = browser.new_context(
-                storage_state=load_storage_state(cookies_path), **stealth_context_kwargs()
+                storage_state=load_storage_state(cookies_path), **stealth_context_kwargs(browser=browser)
             )
             ctx.add_init_script(STEALTH_INIT_JS)
             page = ctx.new_page()

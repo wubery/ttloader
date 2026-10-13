@@ -140,7 +140,7 @@ def _login_flow(acc: Account, db, login: str, password: str) -> None:
     with sync_playwright() as p:
         browser = p.chromium.launch(**stealth_launch_kwargs(proxy, headless=settings.headless))
         try:
-            context = browser.new_context(**stealth_context_kwargs())
+            context = browser.new_context(**stealth_context_kwargs(browser=browser))
             context.add_init_script(STEALTH_INIT_JS)
             page = context.new_page()
 

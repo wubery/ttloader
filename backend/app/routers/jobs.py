@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..models import Account, Banner, Job, JobStatus, Video
-from ..services import posting
+from ..services import caption as caption_service, posting
 from ..schemas import JobBulkCreate, JobBulkOut, JobCreate, JobOut, JobPartsCreate
 from ..scheduler import submit_job
 
@@ -77,7 +77,7 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
         account_id=payload.account_id,
         video_id=payload.video_id,
         banner_id=payload.banner_id,
-        caption=payload.caption,
+        caption=caption_service.spin(payload.caption),
         banner_x=payload.banner_x,
         banner_y=payload.banner_y,
         banner_scale=payload.banner_scale,

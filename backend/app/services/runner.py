@@ -301,6 +301,48 @@ def _parse_overlays(job: Job, db) -> list[dict]:
     return out
 
 
+def posts_today(db, account_id: int, now: datetime) -> int:
+    """Сколько постов аккаунт уже опубликовал сегодня (живые задачи + архив)."""
+    from sqlalchemy import func
+
+    from ..models import JobStat
+
+    start = datetime.combine(now.date(), datetime.min.time())
+    live = db.query(func.count(Job.id)).filter(
+        Job.account_id == account_id, Job.status == JobStatus.done,
+        Job.updated_at >= start).scalar() or 0
+    arch = db.query(func.coalesce(func.sum(JobStat.done), 0)).filter(
+        JobStat.account_id == account_id, JobStat.day == now.date()).scalar() or 0
+    return int(live) + int(arch)
+
+
+def next_quota_slot(now: datetime, hour_from: int, rnd=None) -> datetime:
+    """Завтра, в начале окна активности, со случайным сдвигом до двух часов —
+    чтобы перенесённые задачи разных аккаунтов не стартовали одной секундой."""
+    import random as _random
+    from datetime import timedelta
+
+    rnd = rnd or _random.Random()
+    hour = hour_from if 0 <= hour_from <= 23 else 9
+    day = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+    return day.replace(hour=hour) + timedelta(minutes=rnd.randint(0, 120))
+
+
+def _defer_if_over_quota(db, job: Job, account) -> datetime | None:
+    from .appsettings import get_settings_row
+
+    row = get_settings_row(db)
+    limit = getattr(row, "posts_per_day_max", 0) or 0
+    if limit <= 0:
+        return None
+    now = datetime.now()
+    if posts_today(db, account.id, now) < limit:
+        return None
+    job.status = JobStatus.pending
+    job.scheduled_at = next_quota_slot(now, row.activity_hour_from)
+    return job.scheduled_at
+
+
 def run_job(job_id: int) -> None:
     """Полный цикл выполнения одной задачи. Обновляет статусы прямо в БД."""
     db = SessionLocal()
@@ -311,6 +353,15 @@ def run_job(job_id: int) -> None:
         account = job.account
         video = job.video
         banner = job.banner
+
+        # Квота постов в сутки: сверх неё задача не падает, а переносится на
+        # завтра — иначе массовая рассылка с автоповторами выглядит как спам.
+        moved_to = _defer_if_over_quota(db, job, account)
+        if moved_to is not None:
+            _append_log(job, f"Квота постов на сегодня исчерпана — перенесено на "
+                             f"{moved_to:%d.%m %H:%M}.")
+            db.commit()
+            return
 
         video_path = os.path.join(settings.videos_dir, video.filename)
         source_path = video_path

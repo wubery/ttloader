@@ -94,7 +94,8 @@ def create_jobs(
                 account_id=acc_id,
                 video_id=video_id,
                 banner_id=banner_id,
-                caption=caption_service.vary(caption, len(jobs)) if vary_caption else caption,
+                caption=(caption_service.vary(caption_service.spin(caption), len(jobs)) if vary_caption
+                         else caption_service.spin(caption)),
                 banner_x=banner_x,
                 banner_y=banner_y,
                 banner_scale=banner_scale,
@@ -230,7 +231,7 @@ def create_part_jobs(
                     account_id=acc_id,
                     video_id=video_id,
                     banner_id=banner_id,
-                    caption=f"{caption} {label}".strip() if caption else label,
+                    caption=f"{caption_service.spin(caption)} {label}".strip() if caption else label,
                     overlays=json.dumps(layers, ensure_ascii=False) if layers else overlays_json,
                     scheduled_at=when,
                     uniq_profile_id=uniq_profile_id,

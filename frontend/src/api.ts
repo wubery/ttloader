@@ -54,6 +54,8 @@ export interface ActivitySettings {
   likes_interval_max: number;
   like_cooldown_hours: number;
   activity_max_concurrent: number;
+  /** не больше стольких постов в сутки на аккаунт; 0 — без ограничения */
+  posts_per_day_max: number;
   next_likes_at: string | null;
   warmup_enabled: boolean;
   warmup_days: number;

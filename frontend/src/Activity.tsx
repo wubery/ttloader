@@ -178,6 +178,11 @@ export function Activity({ accounts, onChange }: { accounts: Account[]; onChange
                        min={1} max={5} value={cfg.activity_max_concurrent}
                        onChange={(e) => patch({ activity_max_concurrent: Number(e.target.value) || 1 })} />
               </div>
+              {/* Квота защищает от бана при массовой рассылке: сверх неё задача
+                  не падает, а переносится на завтра в начало окна активности */}
+              <Num label="постов в сутки, не больше" unit="на аккаунт (0 — без лимита)"
+                   min={0} max={100} value={cfg.posts_per_day_max ?? 0}
+                   onChange={(v) => patch({ posts_per_day_max: v })} />
               <div className="form-text fs-sm">
                 Лайкать можно только аккаунты этой панели: адрес поста сверяется с их
                 никами перед нажатием. В ленте лайков нет вовсе.

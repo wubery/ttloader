@@ -51,3 +51,26 @@ def vary(text: str, seed: int) -> str:
     if not has_emoji(out):
         out = f"{out} {_TAIL_EMOJI[seed % len(_TAIL_EMOJI)]}".strip()
     return out
+
+
+# --- Ротация вариантов: {вариант1|вариант2|вариант3} --------------------------
+# Одна подпись байт-в-байт на всех аккаунтах — заметный след, а вариации
+# хештегов мало. Пишешь «{Смотри|Глянь|Зацени} до конца {🔥|👀}», и каждая
+# задача получает свой вариант. Скобки без «|» не трогаются — это обычный текст
+# (и шаблон «Часть {n}/{total}», который подставляется раньше).
+import re as _re
+
+_SPIN_RE = _re.compile(r"\{([^{}]*\|[^{}]*)\}")
+
+
+def spin(text: str, rnd: random.Random | None = None) -> str:
+    """Раскрывает {a|b|c}, вложенные — изнутри наружу."""
+    if not text or "|" not in text:
+        return text
+    rnd = rnd or random.Random()
+    for _ in range(50):                      # предохранитель от патологического ввода
+        new = _SPIN_RE.sub(lambda m: rnd.choice(m.group(1).split("|")), text)
+        if new == text:
+            break
+        text = new
+    return text

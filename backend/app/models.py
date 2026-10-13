@@ -50,6 +50,9 @@ class AppSettings(Base):
     like_cooldown_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
     activity_max_concurrent: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     next_likes_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Не больше стольких постов в сутки на аккаунт (0 — без ограничения). Сверх
+    # квоты задача переносится на завтра, а не падает.
+    posts_per_day_max: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     # --- Разгон нового аккаунта -------------------------------------------------
     # Свежий профиль, который с первого дня работает по полному расписанию,

@@ -220,6 +220,7 @@ class ActivitySettingsOut(BaseModel):
     like_cooldown_hours: int
     activity_max_concurrent: int
     next_likes_at: datetime | None = None
+    posts_per_day_max: int = 0
     warmup_enabled: bool
     warmup_days: int
     warmup_start_percent: int
@@ -241,6 +242,7 @@ class ActivitySettingsUpdate(BaseModel):
     likes_interval_max: int | None = None
     like_cooldown_hours: int | None = None
     activity_max_concurrent: int | None = None
+    posts_per_day_max: int | None = None
     warmup_enabled: bool | None = None
     warmup_days: int | None = None
     warmup_start_percent: int | None = None

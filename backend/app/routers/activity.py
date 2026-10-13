@@ -31,6 +31,7 @@ LIMITS = {
     "likes_per_run_min": (0, 20), "likes_per_run_max": (0, 20),
     "likes_interval_min": (5, 1440), "likes_interval_max": (5, 1440),
     "like_cooldown_hours": (1, 720), "activity_max_concurrent": (1, 5),
+    "posts_per_day_max": (0, 100),
     "warmup_days": (1, 60), "warmup_start_percent": (1, 100),
     "warmup_likes_after_day": (1, 60),
 }

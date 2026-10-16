@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..models import Account, Banner, Job, JobStatus, Video
-from ..services import caption as caption_service, posting
+from ..services import caption as caption_service, posting, retry
 from ..schemas import JobBulkCreate, JobBulkOut, JobCreate, JobOut, JobPartsCreate
 from ..scheduler import submit_job
 
@@ -154,34 +154,48 @@ def create_jobs_parts(payload: JobPartsCreate, db: Session = Depends(get_db)):
 
 def _requeue(job: Job) -> None:
     """Возвращает задачу в очередь как новую: счётчик автоповторов обнуляется —
-    ручной перезапуск это осознанное решение, а не шестая попытка."""
+    ручной перезапуск это осознанное решение, а не шестая попытка. Метка в логе
+    отделяет новую попытку: по хвосту после неё решается, дошла ли она до
+    «Опубликовать» (retry.publish_attempted)."""
     job.status = JobStatus.pending
     job.error = None
     job.scheduled_at = None
     job.attempts = 0
     job.retry_at = None
+    job.log = (job.log or "") + f"\n{retry.MANUAL_RETRY_MARKER}\n"
 
 
 @router.post("/retry-failed")
 def retry_failed(db: Session = Depends(get_db)):
-    """Перезапускает все упавшие задачи разом. Пул постинга сам ограничит
-    параллельность — в очередь они встают все сразу."""
-    jobs = db.query(Job).filter(Job.status == JobStatus.failed).all()
+    """Перезапускает упавшие задачи разом. Пул постинга сам ограничит
+    параллельность — в очередь они встают все сразу.
+
+    Задачи, где публикация могла пройти (дошли до «Опубликовать», а TikTok не
+    подтвердил), массово НЕ перезапускаются: это дубли на аккаунте. Их видно
+    в ответе, перезапускать — по одной, после проверки профиля.
+    """
+    failed = db.query(Job).filter(Job.status == JobStatus.failed).all()
+    jobs = [j for j in failed if not retry.publish_attempted(j.log)]
     for job in jobs:
         _requeue(job)
     db.commit()
     for job in jobs:
         submit_job(job.id)
-    return {"ok": True, "restarted": len(jobs)}
+    return {"ok": True, "restarted": len(jobs), "skipped_maybe_posted": len(failed) - len(jobs)}
 
 
 @router.post("/{job_id}/retry", response_model=JobOut)
-def retry_job(job_id: int, db: Session = Depends(get_db)):
+def retry_job(job_id: int, force: bool = False, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(404, "Задача не найдена")
     if job.status in (JobStatus.rendering, JobStatus.uploading):
         raise HTTPException(400, "Задача уже выполняется")
+    if job.status == JobStatus.done and not force:
+        raise HTTPException(409, "Задача уже выполнена — повтор опубликует ролик ещё раз.")
+    if job.status == JobStatus.failed and retry.publish_attempted(job.log) and not force:
+        raise HTTPException(409, "Публикация могла пройти: попытка дошла до «Опубликовать». "
+                                 "Проверьте профиль — повтор при выложенном ролике даст дубль.")
     _requeue(job)
     db.commit()
     db.refresh(job)
@@ -223,16 +237,13 @@ def get_job_screenshot(job_id: int, db: Session = Depends(get_db)):
 def delete_job(job_id: int, db: Session = Depends(get_db)):
     """Удаляет задачу. Исход завершённой уходит в счётчик статистики — иначе
     ручная чистка очереди обнуляла бы цифры по ошибкам."""
-    from ..scheduler import archive_job
+    from ..services import deletion
 
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(404, "Задача не найдена")
-    archive_job(db, job)          # и счётчик, и файлы (рендер + скриншоты)
-    if job.output_filename:
-        path = os.path.join(settings.output_dir, job.output_filename)
-        if os.path.exists(path):
-            os.remove(path)
-    db.delete(job)
-    db.commit()
+    try:
+        deletion.delete_job(db, job)  # и счётчик, и файлы (рендер + скриншоты)
+    except deletion.DeleteBlocked as e:
+        raise HTTPException(409 if e.needs_force else 400, str(e)) from e
     return {"ok": True}

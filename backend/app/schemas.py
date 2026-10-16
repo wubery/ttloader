@@ -182,6 +182,7 @@ class SettingsUpdate(BaseModel):
     tg_chat_id: str | None = None
     tg_login_enabled: bool | None = None
     new_password: str | None = None
+    current_password: str | None = None   # обязателен вместе с new_password
     ms_client_id: str | None = None   # Azure-приложение для чтения outlook-почты
     allow_shared_proxy: bool | None = None
 

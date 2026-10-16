@@ -1090,6 +1090,20 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
   const { confirm } = useConfirm();
   const { query } = useContext(SearchCtx);
 
+  /** Баннер, который ждут запланированные задачи, удаляется только после
+   *  второго подтверждения (сервер отвечает 409): иначе они молча выйдут без него. */
+  async function removeBanner(b: Banner) {
+    if (!(await confirm("Удалить баннер?", `Вы уверены что хотите удалить «${b.name}»?`))) return;
+    try {
+      await api.deleteBanner(b.id);
+    } catch (e: any) {
+      if (e.status !== 409) { toast.add("error", e.message); return; }
+      if (!(await confirm("Баннер используется", `${e.message} Удалить всё равно?`))) return;
+      try { await api.deleteBanner(b.id, true); } catch (x: any) { toast.add("error", x.message); return; }
+    }
+    onChange(); toast.add("info", "Баннер удалён");
+  }
+
   const filtered = useMemo(() => {
     if (!query) return banners;
     const q = query.toLowerCase();
@@ -1146,7 +1160,7 @@ function Banners({ banners, onChange }: { banners: Banner[]; onChange: () => voi
               <div className="title">{b.name} <span className="badge-vp badge-vp-muted ms-1">{b.type}</span></div>
             </div>
             <div className="actions">
-              <button className="btn btn-vp-danger btn-sm" onClick={async () => { if (await confirm("Удалить баннер?", `Вы уверены что хотите удалить «${b.name}»?`)) { api.deleteBanner(b.id).then(() => { onChange(); toast.add("info", "Баннер удалён"); }); } }}>
+              <button className="btn btn-vp-danger btn-sm" onClick={() => removeBanner(b)}>
                 <i className="bi bi-trash" />
               </button>
             </div>
@@ -1751,6 +1765,7 @@ function Settings() {
   const [chatId, setChatId] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [newPass, setNewPass] = useState("");
+  const [curPass, setCurPass] = useState("");
   const [msClientId, setMsClientId] = useState("");
   const [sharedProxy, setSharedProxy] = useState(false);
   const [ver, setVer] = useState<SystemVersion | null>(null);
@@ -1808,9 +1823,10 @@ function Settings() {
     try {
       const body: any = { tg_chat_id: chatId, tg_login_enabled: enabled, ms_client_id: msClientId, allow_shared_proxy: sharedProxy };
       if (token) body.tg_bot_token = token;
-      if (newPass) body.new_password = newPass;
+      if (newPass) { body.new_password = newPass; body.current_password = curPass; }
       const d = await api.updateSettings(body);
-      setS(d); setToken(""); setNewPass(""); toast.add("success", "Настройки сохранены");
+      setS(d); setToken(""); setNewPass(""); setCurPass("");
+      toast.add("success", newPass ? "Пароль изменён, остальные сессии завершены" : "Настройки сохранены");
     } catch (e: any) { toast.add("error", e.message); }
   }
 
@@ -1884,9 +1900,16 @@ function Settings() {
         </div>
         <div className="d-flex flex-column gap-3">
           <div>
-            <label className="form-label vp">Новый пароль (пусто — не менять)</label>
-            <input className="form-control vp" type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} />
+            <label className="form-label vp">Новый пароль (пусто — не менять, не короче 8 символов)</label>
+            <input className="form-control vp" type="password" autoComplete="new-password" value={newPass} onChange={(e) => setNewPass(e.target.value)} />
           </div>
+          {newPass && (
+            <div>
+              <label className="form-label vp">Текущий пароль</label>
+              <input className="form-control vp" type="password" autoComplete="current-password" value={curPass} onChange={(e) => setCurPass(e.target.value)} />
+              <div className="form-text fs-sm">После смены все остальные входы в панель завершатся.</div>
+            </div>
+          )}
           <div>
             <button className="btn btn-vp" onClick={save}><i className="bi bi-check-lg me-1" />Сохранить</button>
           </div>

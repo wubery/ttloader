@@ -10,7 +10,7 @@ from ..config import settings
 from ..db import get_db
 from ..models import AssetFolder, Job, Video
 from ..schemas import ChunkFinish, FolderAssign, VideoOut
-from ..services import media, storage
+from ..services import deletion, media, storage
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -118,35 +118,12 @@ def get_video_file(video_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/{video_id}")
 def delete_video(video_id: int, force: bool = False, db: Session = Depends(get_db)):
-    """Удаляет видео. С задачами — только по force.
-
-    jobs.video_id объявлен NOT NULL, поэтому обычное удаление ролика, на который
-    ссылается хоть одна задача, падало на уровне БД пятисоткой («не могу удалить
-    старые видео»). Теперь панель честно говорит, сколько задач мешает, и удаляет
-    их вместе с роликом, если пользователь подтвердил: задача без исходника всё
-    равно нерабочая. Вместе с задачами убираем и их отрендеренные файлы.
-    """
+    """Удаляет видео. С задачами — только по force (правила в services/deletion.py)."""
     video = db.get(Video, video_id)
     if video is None:
         raise HTTPException(404, "Видео не найдено")
-
-    jobs = db.query(Job).filter(Job.video_id == video_id).all()
-    if jobs and not force:
-        raise HTTPException(
-            409,
-            f"На это видео завязано задач: {len(jobs)}. "
-            f"Удаление сотрёт их вместе с историей публикаций.",
-        )
-    for job in jobs:
-        if job.output_filename:
-            rendered = os.path.join(settings.output_dir, job.output_filename)
-            if os.path.exists(rendered):
-                os.remove(rendered)
-        db.delete(job)
-
-    path = os.path.join(settings.videos_dir, video.filename)
-    if os.path.exists(path):
-        os.remove(path)
-    db.delete(video)
-    db.commit()
-    return {"ok": True, "deleted_jobs": len(jobs)}
+    try:
+        n = deletion.delete_video(db, video, force=force)
+    except deletion.DeleteBlocked as e:
+        raise HTTPException(409 if e.needs_force else 400, str(e)) from e
+    return {"ok": True, "deleted_jobs": n}

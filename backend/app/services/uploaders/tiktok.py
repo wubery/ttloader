@@ -251,15 +251,22 @@ def upload_tiktok(
                 )
 
             _log(f"Публикация подтверждена TikTok ({detail}). Страница: {page.url}")
-            # Не закрываем браузер мгновенно: запрос публикации может быть ещё в полёте,
-            # а закрытие контекста его оборвёт.
+            # Дальше только ссылка и скриншот. Ролик уже выложен, поэтому любая
+            # ошибка здесь — не провал: раньше она превращала опубликованный пост
+            # в «ошибку», и кнопка «Повторить» выкладывала дубль.
+            posted_url = acc_handle = None
             try:
-                page.wait_for_load_state("networkidle", timeout=15_000)
-            except Exception:  # noqa: BLE001
-                page.wait_for_timeout(5_000)
-            _screenshot(page, "publish_ok", log=_log)
-            posted_url, acc_handle = _resolve_posted_url(
-                page, publish_responses, handle=handle, log=_log)
+                # Не закрываем браузер мгновенно: запрос публикации может быть ещё
+                # в полёте, а закрытие контекста его оборвёт.
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15_000)
+                except Exception:  # noqa: BLE001
+                    page.wait_for_timeout(5_000)
+                _screenshot(page, "publish_ok", log=_log)
+                posted_url, acc_handle = _resolve_posted_url(
+                    page, publish_responses, handle=handle, log=_log)
+            except Exception as e:  # noqa: BLE001
+                _log(f"Ролик опубликован, но ссылку получить не удалось: {e}")
             if posted_url:
                 _log(f"Ссылка на ролик: {posted_url}")
             return UploadResult(ok=True, url=posted_url, handle=acc_handle,

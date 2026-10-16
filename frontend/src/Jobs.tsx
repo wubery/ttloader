@@ -46,8 +46,23 @@ export function Jobs({ jobs, accounts, videos, onChange }: {
     try {
       const r = await api.retryFailed();
       toast.add("success", `Перезапущено: ${r.restarted}`);
+      if (r.skipped_maybe_posted)
+        toast.add("info", `Не перезапущено ${r.skipped_maybe_posted}: публикация могла пройти — `
+          + "проверьте профиль и перезапустите по одной.");
       onChange();
     } catch (e: any) { toast.add("error", e.message); }
+  }
+  /** Если попытка дошла до «Опубликовать», сервер отвечает 409: ролик мог уже
+   *  выйти, и повтор даст дубль — переспрашиваем. */
+  async function retryOne(id: number) {
+    try {
+      await api.retryJob(id);
+    } catch (e: any) {
+      if (e.status !== 409) { toast.add("error", e.message); return; }
+      if (!(await confirm("Повторить публикацию?", `${e.message} Повторить всё равно?`))) return;
+      try { await api.retryJob(id, true); } catch (x: any) { toast.add("error", x.message); return; }
+    }
+    onChange(); toast.add("info", "Повтор запущен");
   }
   const visible = filtered.slice(0, showCount);
 
@@ -135,7 +150,7 @@ export function Jobs({ jobs, accounts, videos, onChange }: {
               </div>
               <div className="d-flex gap-1">
                 {jb.status === "failed" && (
-                  <button className="btn btn-vp-outline btn-sm" onClick={() => api.retryJob(jb.id).then(() => { onChange(); toast.add("info", "Повтор запущен"); }).catch((e) => toast.add("error", e.message))}>
+                  <button className="btn btn-vp-outline btn-sm" onClick={() => retryOne(jb.id)}>
                     <i className="bi bi-arrow-clockwise" />
                   </button>
                 )}

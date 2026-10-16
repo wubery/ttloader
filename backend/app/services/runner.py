@@ -534,10 +534,18 @@ def run_job(job_id: int) -> None:
         # result.log сюда не дописываем: те же строки уже легли через _live_log
 
         if result.ok:
+            # Сначала фиксируем успех, потом всё остальное: ошибка при сохранении
+            # ника не должна превращать выложенный ролик в «ошибку» (а её — в
+            # повтор и дубль на аккаунте).
             job.status = JobStatus.done
             job.posted_url = result.url
-            _remember_handle(account, db, result.handle, _live_log)
             _append_log(job, "Задача выполнена успешно." + (f" Ссылка: {result.url}" if result.url else ""))
+            db.commit()
+            try:
+                _remember_handle(account, db, result.handle, _live_log)
+            except Exception as e:  # noqa: BLE001
+                db.rollback()
+                _live_log(f"Ник аккаунта сохранить не удалось: {e}")
         else:
             job.status = JobStatus.failed
             job.error = result.error or "Неизвестная ошибка постинга"
@@ -548,7 +556,7 @@ def run_job(job_id: int) -> None:
     except Exception as e:  # noqa: BLE001
         db.rollback()
         job = db.get(Job, job_id)
-        if job is not None:
+        if job is not None and job.status != JobStatus.done:   # выложенное не «роняем»
             job.status = JobStatus.failed
             job.error = str(e)
             _append_log(job, f"Критическая ошибка: {e}")

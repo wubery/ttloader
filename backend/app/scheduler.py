@@ -39,17 +39,67 @@ _activity_busy: set[int] = set()
 ACTIVITY_TICK_SECONDS = 300
 
 
+# Аккаунты, по которым прямо сейчас идёт публикация. Одна публикация на аккаунт:
+# при MAX_CONCURRENT_JOBS=2 два поста одного аккаунта шли одновременно — два
+# Chromium на одних куках, а для TikTok это прямой признак автоматизации.
+_posting_busy: set[int] = set()
+BUSY_NOTE = "Аккаунт занят (другая публикация, вход или активность) — запущу, когда освободится."
+
+
+def _job_account_id(job_id: int) -> int | None:
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id)
+        return job.account_id if job is not None else None
+    finally:
+        db.close()
+
+
+def _claim_for_posting(account_id: int) -> bool:
+    """Атомарно занимает аккаунт под публикацию (тем же замком, что активность)."""
+    with _activity_lock:
+        if _account_busy(account_id):
+            return False
+        _posting_busy.add(account_id)
+        return True
+
+
+def _note_busy(job_id: int) -> None:
+    """Один раз пишет в лог, почему задача ждёт: иначе «висит pending» без причины."""
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id)
+        if job is not None and not (job.log or "").rstrip().endswith(BUSY_NOTE):
+            job.log = (job.log or "") + f"{BUSY_NOTE}\n"
+            db.commit()
+    finally:
+        db.close()
+
+
 def submit_job(job_id: int) -> None:
-    """Поставить задачу на немедленное выполнение в пуле потоков."""
+    """Поставить задачу на немедленное выполнение в пуле потоков.
+
+    Если аккаунт занят, задача остаётся pending: её подберёт ближайший опрос
+    очереди (раз в минуту), когда аккаунт освободится.
+    """
     with _inflight_lock:
         if job_id in _inflight:
             return
         _inflight.add(job_id)
 
     def _wrapped() -> None:
+        account_id = None
         try:
+            account_id = _job_account_id(job_id)
+            if account_id is not None and not _claim_for_posting(account_id):
+                _note_busy(job_id)
+                account_id = None          # не наш замок — и снимать его не нам
+                return
             run_job(job_id)
         finally:
+            if account_id is not None:
+                with _activity_lock:
+                    _posting_busy.discard(account_id)
             with _inflight_lock:
                 _inflight.discard(job_id)
 
@@ -229,7 +279,9 @@ def _check_sessions() -> None:
         for acc in accounts:
             if not acc.has_tt_credentials or not acc.has_cookies:
                 continue
-            if auto_login.is_running(acc.id):
+            # Проверка сама запускает браузер — не лезем на занятый аккаунт
+            # (публикация, вход или активность уже держат его куки).
+            if _account_busy(acc.id):
                 continue
             try:
                 if cookies_alive(acc.platform.value, acc.cookies_path, acc.proxy_url):
@@ -251,7 +303,7 @@ def _account_busy(account_id: int) -> bool:
     """
     from .services import auto_login
 
-    if account_id in _activity_busy:
+    if account_id in _activity_busy or account_id in _posting_busy:
         return True
     try:
         if auto_login.is_running(account_id):

@@ -11,6 +11,7 @@ from ..config import settings
 from ..db import get_db
 from ..models import Banner, BannerType
 from ..schemas import BannerOut, BannerUpdate
+from ..services import deletion
 
 router = APIRouter(prefix="/api/banners", tags=["banners"])
 
@@ -81,13 +82,13 @@ def get_banner_file(banner_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{banner_id}")
-def delete_banner(banner_id: int, db: Session = Depends(get_db)):
+def delete_banner(banner_id: int, force: bool = False, db: Session = Depends(get_db)):
+    """Удаляет баннер. Если его ждут запланированные задачи — 409, удаление по force."""
     banner = db.get(Banner, banner_id)
     if banner is None:
         raise HTTPException(404, "Баннер не найден")
-    path = os.path.join(settings.banners_dir, banner.filename)
-    if os.path.exists(path):
-        os.remove(path)
-    db.delete(banner)
-    db.commit()
-    return {"ok": True}
+    try:
+        n = deletion.delete_banner(db, banner, force=force)
+    except deletion.DeleteBlocked as e:
+        raise HTTPException(409 if e.needs_force else 400, str(e)) from e
+    return {"ok": True, "affected_jobs": n}

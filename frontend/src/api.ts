@@ -476,7 +476,7 @@ export const api = {
 
   // settings
   getSettings: () => fetch("/api/settings").then((r) => j<SettingsData>(r)),
-  updateSettings: (b: Partial<{ tg_bot_token: string; tg_chat_id: string; tg_login_enabled: boolean; new_password: string; ms_client_id: string; allow_shared_proxy: boolean }>) =>
+  updateSettings: (b: Partial<{ tg_bot_token: string; tg_chat_id: string; tg_login_enabled: boolean; new_password: string; current_password: string; ms_client_id: string; allow_shared_proxy: boolean }>) =>
     fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
@@ -678,7 +678,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<Banner>(r)),
-  deleteBanner: (id: number) => fetch(`/api/banners/${id}`, { method: "DELETE" }).then((r) => j<any>(r)),
+  /** force=true удаляет баннер, который ждут запланированные задачи (они выйдут без него). */
+  deleteBanner: (id: number, force = false) =>
+    fetch(`/api/banners/${id}${force ? "?force=true" : ""}`, { method: "DELETE" }).then((r) => j<any>(r)),
   bannerFileUrl: (id: number) => `/api/banners/${id}/file`,
 
   // jobs
@@ -740,9 +742,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b),
     }).then((r) => j<{ jobs: Job[]; skipped: string[] }>(r)),
-  retryJob: (id: number) => fetch(`/api/jobs/${id}/retry`, { method: "POST" }).then((r) => j<Job>(r)),
+  /** force=true — повтор задачи, где публикация могла пройти (сервер отвечает 409). */
+  retryJob: (id: number, force = false) =>
+    fetch(`/api/jobs/${id}/retry${force ? "?force=true" : ""}`, { method: "POST" }).then((r) => j<Job>(r)),
   retryFailed: () =>
-    fetch("/api/jobs/retry-failed", { method: "POST" }).then((r) => j<{ ok: boolean; restarted: number }>(r)),
+    fetch("/api/jobs/retry-failed", { method: "POST" })
+      .then((r) => j<{ ok: boolean; restarted: number; skipped_maybe_posted: number }>(r)),
   statsArchive: () => fetch("/api/stats/archive").then((r) => j<JobStat[]>(r)),
   emuDevice: (addr: string) =>
     fetch("/api/emulator/device", { method: "POST", headers: { "Content-Type": "application/json" },

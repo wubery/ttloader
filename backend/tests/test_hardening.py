@@ -24,8 +24,10 @@ def db(client):
 @pytest.fixture(autouse=True)
 def _clean_limiter():
     ratelimit._fails.clear()
+    ratelimit._trusted.clear()
     yield
     ratelimit._fails.clear()
+    ratelimit._trusted.clear()
 
 
 # ------------------------------------------------------------- перебор входа

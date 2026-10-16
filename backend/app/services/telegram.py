@@ -183,6 +183,11 @@ def check_login_code(code: str) -> bool:
 
 
 # ---------- Бот управления (команды + приём видео) ----------
+def is_allowed(chat_id: str, allowed: list[str]) -> bool:
+    """Команды принимаются только из чатов, перечисленных в настройках."""
+    return bool(chat_id) and chat_id in allowed
+
+
 def _handle_update(token: str, allowed: list[str], upd: dict) -> None:
     msg = upd.get("message") or upd.get("channel_post")
     callback = upd.get("callback_query")
@@ -194,12 +199,20 @@ def _handle_update(token: str, allowed: list[str], upd: dict) -> None:
     if not msg:
         return
     chat_id = str(msg.get("chat", {}).get("id", ""))
-    if allowed and chat_id not in allowed:
-        return  # команды только от разрешённых аккаунтов
-
     # raw сохраняем: в /newpost есть подпись, а нижний регистр её портил.
     raw = (msg.get("text") or "").strip()
     text = raw.lower()
+
+    if not is_allowed(chat_id, allowed):
+        # Пустой список — это «никому», а не «всем»: раньше бот без chat_id
+        # выполнял команды любого, кто его нашёл (/newpost all, /delete).
+        # Постороннему отвечаем только на /start — его chat_id, чтобы владелец
+        # мог вписать свой в панель; ничего о панели в ответе нет.
+        if text.startswith("/start") and msg.get("chat", {}).get("type") == "private":
+            send_message(token, chat_id,
+                f"Этот чат не подключён к панели. Ваш chat_id: {chat_id}\n"
+                f"Если бот ваш — впишите его в «Настройки» → Telegram.")
+        return
 
     # Команды
     if text.startswith("/start") or text.startswith("/help"):
@@ -248,7 +261,7 @@ def _handle_update(token: str, allowed: list[str], upd: dict) -> None:
 
 def _handle_callback(token: str, allowed: list[str], callback: dict) -> None:
     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
-    if allowed and chat_id not in allowed:
+    if not is_allowed(chat_id, allowed):
         return
 
     data = callback.get("data", "")
@@ -524,10 +537,13 @@ def _cmd_newpost(token: str, chat_id: str, text: str) -> None:
 
 
 def _cmd_delete(token: str, chat_id: str, text: str) -> None:
+    """Удаление по тем же правилам, что в панели (services/deletion.py):
+    то, что сейчас выполняется, не трогаем, а видео с задачами и баннер,
+    который ждут запланированные задачи, удаляем только с «force»."""
     parts = text.split()
     if len(parts) < 3:
         send_message(token, chat_id,
-            "🗑 Использование: /delete <тип> <id>\n"
+            "🗑 Использование: /delete <тип> <id> [force]\n"
             "Типы: video, banner, job\n"
             "Пример: /delete video 5")
         return
@@ -538,46 +554,47 @@ def _cmd_delete(token: str, chat_id: str, text: str) -> None:
     except ValueError:
         send_message(token, chat_id, "❌ ID должен быть числом.")
         return
+    force = len(parts) > 3 and parts[3].lower() == "force"
 
-    from ..models import Video, Banner, Job
-    import os
-    from ..config import settings
+    from ..models import Banner, Job, Video
+    from . import deletion
 
     db = SessionLocal()
     try:
         if item_type == "video":
-            item = db.query(Video).filter(Video.id == item_id).first()
+            item = db.get(Video, item_id)
             if not item:
                 send_message(token, chat_id, f"❌ Видео #{item_id} не найдено.")
                 return
-            # Удаляем файл
-            fpath = os.path.join(settings.videos_dir, item.filename)
-            if os.path.exists(fpath):
-                os.remove(fpath)
-            db.delete(item)
-            db.commit()
-            send_message(token, chat_id, f"✅ Видео «{item.title}» удалено.")
+            title = item.title
+            n = deletion.delete_video(db, item, force=force)
+            send_message(token, chat_id, f"✅ Видео «{title}» удалено"
+                         + (f" вместе с задачами ({n})." if n else "."))
         elif item_type == "banner":
-            item = db.query(Banner).filter(Banner.id == item_id).first()
+            item = db.get(Banner, item_id)
             if not item:
                 send_message(token, chat_id, f"❌ Баннер #{item_id} не найден.")
                 return
-            fpath = os.path.join(settings.banners_dir, item.filename)
-            if os.path.exists(fpath):
-                os.remove(fpath)
-            db.delete(item)
-            db.commit()
-            send_message(token, chat_id, f"✅ Баннер «{item.name}» удалён.")
+            name = item.name
+            n = deletion.delete_banner(db, item, force=force)
+            send_message(token, chat_id, f"✅ Баннер «{name}» удалён"
+                         + (f"; задач, которые выйдут без него: {n}." if n else "."))
         elif item_type == "job":
-            item = db.query(Job).filter(Job.id == item_id).first()
+            item = db.get(Job, item_id)
             if not item:
                 send_message(token, chat_id, f"❌ Задача #{item_id} не найдена.")
                 return
-            db.delete(item)
-            db.commit()
+            deletion.delete_job(db, item)
             send_message(token, chat_id, f"✅ Задача #{item_id} удалена.")
         else:
             send_message(token, chat_id, f"❌ Неизвестный тип: {item_type}. Используй: video, banner, job")
+    except deletion.DeleteBlocked as e:
+        db.rollback()
+        hint = f"\nУдалить всё равно: /delete {item_type} {item_id} force" if e.needs_force else ""
+        send_message(token, chat_id, f"⚠️ {e}{hint}")
+    except Exception as e:  # noqa: BLE001 — молчание бота хуже текста ошибки
+        db.rollback()
+        send_message(token, chat_id, f"❌ Не удалось удалить: {e}")
     finally:
         db.close()
 

@@ -45,7 +45,11 @@ def schedule_retry(error: str | None, attempts: int, now: datetime) -> datetime 
 
 # Маркер, который загрузчик пишет в лог прямо перед нажатием «Опубликовать».
 PUBLISH_MARKER = "Публикую…"
-_ATTEMPT_MARKER = "Автоповтор "
+# Начало новой попытки: автоповтор пишет первую строку, ручной перезапуск — вторую.
+# Без второй старая метка «Публикую…» оставалась в хвосте, и после ручного
+# перезапуска любая ранняя ошибка (прокси, куки) навсегда отключала автоповтор.
+MANUAL_RETRY_MARKER = "Перезапуск вручную."
+_ATTEMPT_MARKERS = ("Автоповтор ", MANUAL_RETRY_MARKER)
 
 
 def publish_attempted(log: str | None) -> bool:
@@ -53,10 +57,10 @@ def publish_attempted(log: str | None) -> bool:
 
     Если да, повторять автоматически нельзя: TikTok мог принять ролик, а
     панель — не дождаться подтверждения, и повтор выложит дубль. Смотрим
-    только хвост лога после последнего автоповтора — прошлые попытки не в счёт.
+    только хвост лога после начала последней попытки — прошлые не в счёт.
     """
     text = log or ""
-    cut = text.rfind(_ATTEMPT_MARKER)
+    cut = max(text.rfind(m) for m in _ATTEMPT_MARKERS)
     tail = text[cut:] if cut >= 0 else text
     return PUBLISH_MARKER in tail
 

@@ -76,6 +76,12 @@ def logout(response: Response):
 @router.post("/telegram/request")
 def telegram_request():
     result = telegram.issue_login_code()
+    if result.startswith("rate_limited:"):
+        wait = int(result.split(":", 1)[1])
+        raise HTTPException(
+            429, f"Код уже отправлен. Новый можно запросить через {wait} с.",
+            headers={"Retry-After": str(wait)},
+        )
     if result == "not_configured":
         raise HTTPException(
             400,

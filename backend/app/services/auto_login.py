@@ -15,6 +15,7 @@ import logging
 import threading
 from datetime import datetime
 
+from .. import clock
 from ..config import settings
 from ..db import SessionLocal
 from ..models import Account
@@ -63,13 +64,13 @@ def get_state(account_id: int) -> dict:
 
 def _set(account_id: int, stage: str, message: str | None = None, screenshot: str | None = None) -> None:
     with _state_lock:
-        cur = _state.setdefault(account_id, {"started_at": datetime.now()})
+        cur = _state.setdefault(account_id, {"started_at": clock.now()})
         cur["stage"] = stage
         cur["message"] = message
         if screenshot is not None:
             cur["screenshot"] = screenshot
         if stage in ("done", "error"):
-            cur["finished_at"] = datetime.now()
+            cur["finished_at"] = clock.now()
     log.info("Автовход #%s: %s — %s", account_id, stage, message or "")
 
 
@@ -78,16 +79,21 @@ def submit_manual_code(account_id: int, code: str) -> None:
     _manual_codes[account_id] = code.strip()
 
 
+RUNNING_STAGES = ("starting", "filling", "waiting_code", "submitting_code", "captcha")
+
+
 def is_running(account_id: int) -> bool:
-    return get_state(account_id).get("stage") in ("starting", "filling", "waiting_code", "submitting_code", "captcha")
+    return get_state(account_id).get("stage") in RUNNING_STAGES
 
 
 def start(account_id: int) -> None:
     """Запускает вход в фоне. Повторный запуск, пока идёт предыдущий, игнорируется."""
-    if is_running(account_id):
-        raise UploadError("Вход в этот аккаунт уже идёт.")
+    # Проверка и пометка — под одним замком: иначе два одновременных запуска
+    # (кнопка и автоперелогин) проходили проверку оба, и браузеров было два.
     with _state_lock:
-        _state[account_id] = {"stage": "starting", "message": "Готовлю браузер…", "started_at": datetime.now()}
+        if (_state.get(account_id) or {}).get("stage") in RUNNING_STAGES:
+            raise UploadError("Вход в этот аккаунт уже идёт.")
+        _state[account_id] = {"stage": "starting", "message": "Готовлю браузер…", "started_at": clock.now()}
     _manual_codes.pop(account_id, None)
     threading.Thread(target=_run, args=(account_id,), daemon=True).start()
 
@@ -134,7 +140,7 @@ def _remember_error(db, account_id: int, message: str) -> None:
 def _login_flow(acc: Account, db, login: str, password: str) -> None:
     from playwright.sync_api import sync_playwright
 
-    started = datetime.now()
+    started = clock.now()
     proxy = parse_proxy(acc.proxy_url) if acc.proxy_url else None
 
     with sync_playwright() as p:
@@ -336,10 +342,16 @@ def _wait_captcha(acc: Account, db, page, context) -> None:
 def _finish(acc: Account, db, context) -> None:
     """Сохраняет куки — тем же способом, что и ручной вход."""
     from ..routers.accounts import _apply_saved_state
+    from .uploaders.base import has_session_cookie
 
     state = context.storage_state()
+    # Без куки сессии это не вход: раньше такие куки сохранялись поверх прежних
+    # (старый файл удалялся), а панель писала «Вход выполнен».
+    if not has_session_cookie(state):
+        raise UploadError("TikTok увёл со страницы входа, но сессию не выдал — "
+                          "куки не сохранены. Попробуйте позже или войдите вручную.")
     _apply_saved_state(acc, db, state)
-    acc.last_login_at = datetime.now()
+    acc.last_login_at = clock.now()
     acc.login_error = None
     db.commit()
     _set(acc.id, "done", "Вход выполнен, куки сохранены.")

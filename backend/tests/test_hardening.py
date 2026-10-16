@@ -77,8 +77,8 @@ def test_successful_login_resets_counter(client):
 def test_telegram_codes_burn_after_failures():
     from app.services import telegram
 
-    telegram._login_codes.clear()
-    telegram._login_codes["123456"] = 9e12
+    telegram.reset_login_codes()
+    telegram._active_code = ("123456", 9e12)
     for _ in range(telegram.MAX_CODE_FAILURES):
         assert not telegram.check_login_code("000000")
     assert not telegram.check_login_code("123456")             # настоящий код сгорел

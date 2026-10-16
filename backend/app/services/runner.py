@@ -17,6 +17,7 @@ from ..models import Banner, BannerType, Job, JobStatus
 from . import media, uniqueizer
 from .uploaders import get_uploader, parse_proxy
 from .uploaders.base import UploadError
+from .. import clock
 
 
 # Потолок лога задачи. С автоповторами лог растёт вшестеро, а хранится в строке
@@ -26,7 +27,7 @@ MAX_LOG_CHARS = 20_000
 
 
 def _append_log(job: Job, msg: str) -> None:
-    stamp = datetime.now().strftime("%H:%M:%S")
+    stamp = clock.now().strftime("%H:%M:%S")
     log = (job.log or "") + f"[{stamp}] {msg}\n"
     if len(log) > MAX_LOG_CHARS:
         log = "…(начало лога обрезано)\n" + log[-MAX_LOG_CHARS:]
@@ -335,12 +336,42 @@ def _defer_if_over_quota(db, job: Job, account) -> datetime | None:
     limit = getattr(row, "posts_per_day_max", 0) or 0
     if limit <= 0:
         return None
-    now = datetime.now()
+    now = clock.now()
     if posts_today(db, account.id, now) < limit:
         return None
     job.status = JobStatus.pending
     job.scheduled_at = next_quota_slot(now, row.activity_hour_from)
     return job.scheduled_at
+
+
+SERIES_NOTE = "Жду предыдущую часть серии — порядок частей сохраняется."
+
+
+def series_blocker(db, job: Job) -> Job | None:
+    """Предыдущая часть серии, которая ещё может выйти, — тогда эта ждёт.
+
+    Без этого упавшая часть 2 уходила на автоповтор, а часть 3 по расписанию
+    выходила раньше неё. Если предыдущая часть упала окончательно (повтора не
+    будет), не ждём: остальная серия важнее идеального порядка.
+    """
+    from . import retry
+
+    if not job.group_id or not job.part_index or job.part_index <= 1:
+        return None
+    prev = db.query(Job).filter(Job.group_id == job.group_id,
+                                Job.part_index == job.part_index - 1).first()
+    if prev is None or prev.status == JobStatus.done:
+        return None
+    if prev.status in (JobStatus.pending, JobStatus.rendering, JobStatus.uploading):
+        return prev
+    # failed: ждём, только если повтор ещё будет
+    if prev.retry_at is not None:
+        return prev
+    if prev.attempts < retry.MAX_ATTEMPTS:
+        when, _ = retry.schedule_retry_for(prev.error, prev.log, prev.attempts, clock.now())
+        if when is not None:
+            return prev
+    return None
 
 
 def run_job(job_id: int) -> None:
@@ -353,6 +384,14 @@ def run_job(job_id: int) -> None:
         account = job.account
         video = job.video
         banner = job.banner
+
+        # Часть серии не обгоняет предыдущую: остаёмся в очереди, ближайший
+        # опрос (раз в минуту) попробует снова.
+        if series_blocker(db, job) is not None:
+            if not (job.log or "").rstrip().endswith(SERIES_NOTE):
+                _append_log(job, SERIES_NOTE)
+                db.commit()
+            return
 
         # Квота постов в сутки: сверх неё задача не падает, а переносится на
         # завтра — иначе массовая рассылка с автоповторами выглядит как спам.

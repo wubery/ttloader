@@ -7,6 +7,7 @@ from sqlalchemy import (Column, Date, DateTime, Enum, Float, ForeignKey, Integer
                         Text, UniqueConstraint, func)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from . import clock
 from .db import Base
 
 
@@ -16,6 +17,9 @@ class AppSettings(Base):
     __tablename__ = "app_settings"
 
     id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    # В каком поясе лежат даты в БД (см. clock.migrate_stored_times); пусто —
+    # старый формат, до единых часов.
+    clock_tz: Mapped[str | None] = mapped_column(String(64), default=None)
     admin_user: Mapped[str] = mapped_column(String(120), default="admin")
     admin_pass_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     session_secret: Mapped[str | None] = mapped_column(String(128), default=None)
@@ -96,7 +100,7 @@ class AccountGroup(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True)
     color: Mapped[str | None] = mapped_column(String(9), default=None)   # #RRGGBB для бейджа
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class Account(Base):
@@ -123,7 +127,7 @@ class Account(Base):
     # Группа-когорта (см. AccountGroup). Это НЕ Job.group_id — там пачка задач.
     group_id: Mapped[int | None] = mapped_column(ForeignKey("account_groups.id"), default=None)
     active: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
     # --- Данные для автоматического входа -------------------------------------
     # Пароли и токены хранятся зашифрованными (services/crypto.py), наружу не отдаются.
@@ -204,7 +208,7 @@ class AssetFolder(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     kind: Mapped[str] = mapped_column(String(16))          # video | hook | background
     name: Mapped[str] = mapped_column(String(120))
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
     groups: Mapped[list[AccountGroup]] = relationship(secondary=folder_groups, lazy="selectin")
 
@@ -225,7 +229,7 @@ class ActivityRun(Base):
         ForeignKey("accounts.id"), default=None)                  # кого лайкали
     status: Mapped[str] = mapped_column(String(16))               # ok | error | skipped
     detail: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class Video(Base):
@@ -240,7 +244,7 @@ class Video(Base):
     height: Mapped[int | None] = mapped_column(Integer, default=None)
     duration: Mapped[float | None] = mapped_column(Float, default=None)
     folder_id: Mapped[int | None] = mapped_column(ForeignKey("asset_folders.id"), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
     jobs: Mapped[list[Job]] = relationship(back_populates="video")
 
@@ -261,7 +265,7 @@ class Hook(Base):
     height: Mapped[int | None] = mapped_column(Integer, default=None)
     duration: Mapped[float | None] = mapped_column(Float, default=None)
     folder_id: Mapped[int | None] = mapped_column(ForeignKey("asset_folders.id"), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class OverlayAsset(Base):
@@ -276,7 +280,7 @@ class OverlayAsset(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(300))
     filename: Mapped[str] = mapped_column(String(500))  # относительно overlays_dir
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class AdClip(Base):
@@ -290,7 +294,7 @@ class AdClip(Base):
     width: Mapped[int | None] = mapped_column(Integer, default=None)
     height: Mapped[int | None] = mapped_column(Integer, default=None)
     duration: Mapped[float | None] = mapped_column(Float, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class Background(Base):
@@ -307,7 +311,7 @@ class Background(Base):
     filename: Mapped[str] = mapped_column(String(500))   # относительно backgrounds_dir
     is_video: Mapped[bool] = mapped_column(default=False, server_default="0")
     folder_id: Mapped[int | None] = mapped_column(ForeignKey("asset_folders.id"), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class UniqProfile(Base):
@@ -325,7 +329,7 @@ class UniqProfile(Base):
     name: Mapped[str] = mapped_column(String(200))
     params: Mapped[str | None] = mapped_column(Text, default=None)
     is_default: Mapped[bool] = mapped_column(default=False, server_default="0")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
 
 class Banner(Base):
@@ -347,7 +351,7 @@ class Banner(Base):
     # Движение баннера по кадру: none | drift | bounce | slide; motion_speed — множитель.
     motion: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
     motion_speed: Mapped[float] = mapped_column(Float, default=1.0, server_default="1.0")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
 
     jobs: Mapped[list[Job]] = relationship(back_populates="banner")
 
@@ -409,8 +413,9 @@ class Job(Base):
     # Назначает планировщик, а не runner — см. services/retry.py.
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     retry_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now, server_default=func.now(),
+                                                 onupdate=clock.now)
 
     account: Mapped[Account] = relationship(back_populates="jobs")
     video: Mapped[Video] = relationship(back_populates="jobs")

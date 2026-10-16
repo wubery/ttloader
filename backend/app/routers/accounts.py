@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..config import settings
 from ..db import get_db
 from ..models import Account, AccountGroup
@@ -202,15 +203,36 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
     return acc
 
 
+BUSY = "По аккаунту сейчас идёт публикация или активность — дождитесь окончания."
+
+
+def _ensure_idle(account_id: int) -> None:
+    from ..scheduler import account_in_use
+
+    if account_in_use(account_id):
+        raise HTTPException(409, BUSY)
+
+
 @router.delete("/{account_id}")
 def delete_account(account_id: int, db: Session = Depends(get_db)):
+    """Удаляет аккаунт с его задачами. Пока по нему идёт публикация — нельзя:
+    каскад стирал и выполняющуюся задачу. Исходы задач уходят в статистику."""
+    from ..services import deletion
+
     acc = db.get(Account, account_id)
     if acc is None:
         raise HTTPException(404, "Аккаунт не найден")
-    if acc.cookies_path and os.path.exists(acc.cookies_path):
-        os.remove(acc.cookies_path)
+    _ensure_idle(account_id)
+    cookies = acc.cookies_path
+    for job in list(acc.jobs):
+        try:
+            deletion.drop_job(db, job)
+        except deletion.DeleteBlocked as e:
+            raise HTTPException(409, str(e)) from e
     db.delete(acc)
     db.commit()
+    if cookies and os.path.exists(cookies):
+        os.remove(cookies)
     return {"ok": True}
 
 
@@ -298,7 +320,7 @@ async def check_proxy(account_id: int, db: Session = Depends(get_db)):
     # сохраняем результат в аккаунт (тот же статус, что показывает автопроверка)
     acc.proxy_ok = ok
     acc.proxy_ip = ip
-    acc.proxy_checked_at = datetime.now()
+    acc.proxy_checked_at = clock.now()
     db.commit()
     return ProxyCheckOut(ok=ok, ip=ip, error=err)
 
@@ -342,6 +364,7 @@ async def login_credentials(account_id: int, payload: LoginCredentialsIn, db: Se
         raise HTTPException(404, "Аккаунт не найден")
     if acc.platform.value not in LOGIN_URLS:
         raise HTTPException(400, f"Вход для платформы {acc.platform.value} не поддержан")
+    _ensure_idle(acc.id)
     try:
         result = await login_manager.start_credentials(
             account_id=acc.id,
@@ -371,6 +394,7 @@ def login_auto(account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, "У аккаунта не заданы логин и пароль — впишите их в профиле.")
     if acc.platform.value not in LOGIN_URLS:
         raise HTTPException(400, f"Вход для платформы {acc.platform.value} не поддержан")
+    _ensure_idle(acc.id)
     try:
         auto_login.start(acc.id)
     except UploadError as e:

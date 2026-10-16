@@ -10,6 +10,7 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..db import get_db
 from ..models import Account, ActivityRun
 from ..schemas import (
@@ -66,7 +67,7 @@ def warmup_state(db: Session = Depends(get_db)):
     from ..services import activity as act
 
     row = get_settings_row(db)
-    now = datetime.now()
+    now = clock.now()
     out = []
     for a in db.query(Account).filter(Account.active.is_(True)).all():
         started = a.warmup_started_at or a.created_at
@@ -92,7 +93,7 @@ def restart_warmup(account_id: int, db: Session = Depends(get_db)):
     acc = db.get(Account, account_id)
     if acc is None:
         raise HTTPException(404, "Аккаунт не найден")
-    acc.warmup_started_at = datetime.now()
+    acc.warmup_started_at = clock.now()
     db.commit()
     return {"ok": True, "detail": f"«{acc.name}»: разгон начат заново"}
 

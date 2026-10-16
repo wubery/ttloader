@@ -197,6 +197,10 @@ def upload_tiktok(
             _kill_overlays(page, log=_log)
 
             if caption:
+                # Без описания не публикуем: раньше ошибка здесь только писалась
+                # в лог, и ролик уходил без подписи, хэштегов и ссылок, а задача
+                # считалась выполненной. До «Опубликовать» ещё далеко, так что
+                # упавшая здесь задача безопасна для автоповтора.
                 _log("Ввожу описание…")
                 try:
                     editor = page.locator(CAPTION_EDITOR).first
@@ -204,8 +208,14 @@ def upload_tiktok(
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Delete")
                     editor.type(caption, delay=15)
+                    typed = editor.inner_text(timeout=5_000)
                 except Exception as e:  # noqa: BLE001
-                    _log(f"Не удалось ввести описание автоматически: {e}")
+                    raise UploadError(f"Не удалось ввести описание — публикация отменена: {e}") from e
+                if not caption_typed(caption, typed):
+                    shot = _screenshot(page, "caption_missing", log=_log)
+                    raise UploadError(
+                        "Описание не появилось в редакторе TikTok — публикация отменена, "
+                        "чтобы ролик не ушёл без подписи." + (f" Скриншот: {shot}" if shot else ""))
 
             # Ждём РЕАЛЬНОГО завершения заливки, а не фиксированные 10 секунд:
             # через прокси большое видео льётся минутами, и клик по неактивной
@@ -278,6 +288,19 @@ def upload_tiktok(
             return UploadResult(ok=False, log="\n".join(lines), error=str(e))
         finally:
             browser.close()
+
+
+def _caption_key(text: str) -> str:
+    """Текст без пробелов и знаков #/@ — редактор TikTok превращает хэштеги и
+    упоминания в отдельные элементы и может менять пробелы вокруг них."""
+    return "".join(ch for ch in (text or "") if not ch.isspace() and ch not in "#@").lower()
+
+
+def caption_typed(caption: str, editor_text: str, probe: int = 12) -> bool:
+    """Попало ли описание в редактор: сверяем начало, а не всё целиком —
+    длинный хвост с хэштегами редактор может переразметить подсказками."""
+    want = _caption_key(caption)[:probe]
+    return not want or want in _caption_key(editor_text)
 
 
 def _assert_logged_in(page) -> None:

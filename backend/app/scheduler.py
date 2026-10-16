@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from . import clock
 from .config import settings
 from .db import SessionLocal
 from .models import Account, ActivityRun, Job, JobStat, JobStatus
@@ -51,6 +52,22 @@ def _job_account_id(job_id: int) -> int | None:
     try:
         job = db.get(Job, job_id)
         return job.account_id if job is not None else None
+    finally:
+        db.close()
+
+
+def account_in_use(account_id: int) -> bool:
+    """Идёт ли по аккаунту публикация или фоновая активность — для ручного
+    входа и удаления аккаунта из панели (свои браузеры на тех же куках)."""
+    with _activity_lock:
+        if account_id in _posting_busy or account_id in _activity_busy:
+            return True
+    db = SessionLocal()
+    try:
+        return db.query(Job).filter(
+            Job.account_id == account_id,
+            Job.status.in_([JobStatus.rendering, JobStatus.uploading]),
+        ).count() > 0
     finally:
         db.close()
 
@@ -111,7 +128,7 @@ def _poll_due_jobs() -> None:
     спланировать повторы упавших."""
     db = SessionLocal()
     try:
-        now = datetime.now()
+        now = clock.now()
         _schedule_retries(db, now)
         jobs = (
             db.query(Job)
@@ -177,7 +194,7 @@ def archive_job(db, job: Job) -> None:
 
     if job.status not in (JobStatus.done, JobStatus.failed):
         return
-    day = (job.created_at or datetime.now()).date()
+    day = (job.created_at or clock.now()).date()
     row = db.query(JobStat).filter(JobStat.day == day, JobStat.account_id == job.account_id).first()
     if row is None:
         row = JobStat(day=day, account_id=job.account_id)
@@ -210,7 +227,7 @@ def _archive_old_jobs() -> int:
     keep = getattr(settings, "jobs_keep_days", 3)
     if not keep or keep <= 0:
         return 0
-    cutoff = datetime.now() - timedelta(days=keep)
+    cutoff = clock.now() - timedelta(days=keep)
     db = SessionLocal()
     try:
         old = (db.query(Job)
@@ -248,7 +265,7 @@ def _check_proxies() -> None:
                 err = str(e)
             acc.proxy_ok = ok
             acc.proxy_ip = ip
-            acc.proxy_checked_at = datetime.now()
+            acc.proxy_checked_at = clock.now()
             db.commit()
             if not ok:
                 try:  # Telegram появляется на Этапе 4 — до него это no-op
@@ -308,6 +325,14 @@ def _account_busy(account_id: int) -> bool:
     try:
         if auto_login.is_running(account_id):
             return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from .services.login_session import login_manager
+
+        st = login_manager.status()
+        if st.get("active") and st.get("account_id") == account_id:
+            return True                # открыт ручной вход в этот аккаунт
     except Exception:  # noqa: BLE001
         pass
     db = SessionLocal()
@@ -374,7 +399,7 @@ def run_browse(account_id: int) -> None:
                     return
                 row = get_settings_row(db)
                 rnd = _random.Random()
-                now = datetime.now()
+                now = clock.now()
                 # Разгон: и длина сессии, и частота заходов сжимаются одним
                 # коэффициентом, поэтому свежий аккаунт не выдаёт себя всплеском
                 # активности в первый же день.
@@ -393,11 +418,11 @@ def run_browse(account_id: int) -> None:
                 if status == "ok" and factor < 1.0:
                     detail = (f"{detail}; разгон: день {act.warmup_day(started, now)} "
                               f"из {row.warmup_days}, {round(factor * 100)}%")
-                acc.last_activity_at = datetime.now()
+                acc.last_activity_at = clock.now()
                 per_min, per_max = act.scale_range(row.activity_per_day_min,
                                                    row.activity_per_day_max, factor)
                 acc.next_activity_at = act.next_activity_time(
-                    datetime.now(),
+                    clock.now(),
                     per_day_min=per_min, per_day_max=per_max,
                     hour_from=row.activity_hour_from, hour_to=row.activity_hour_to, rnd=rnd)
                 name = acc.name
@@ -447,7 +472,7 @@ def run_like(liker_id: int, target_id: int) -> None:
 
 def _recent_like_pairs(db, cooldown_hours: int) -> set[tuple[int, int]]:
     """Пары «кто кого» за окно кулдауна — в этот прогон их не берём."""
-    since = datetime.now() - timedelta(hours=max(1, cooldown_hours))
+    since = clock.now() - timedelta(hours=max(1, cooldown_hours))
     rows = db.query(ActivityRun.account_id, ActivityRun.target_account_id).filter(
         ActivityRun.kind == "like",
         ActivityRun.status == "ok",
@@ -468,7 +493,7 @@ def _activity_tick() -> None:
     try:
         row = get_settings_row(db)
         accounts = db.query(Account).filter(Account.active.is_(True)).all()
-        now = datetime.now()
+        now = clock.now()
         rnd = _random.Random()
         starts: list[tuple] = []
 
@@ -528,7 +553,7 @@ def _cleanup_output() -> None:
     for name in os.listdir(out_dir):
         if name in alive:
             continue                       # файл принадлежит существующей задаче
-        if not (name.startswith(("tiktok_", "preview_")) or
+        if not (name.startswith(("tiktok_", "preview_", "emu_")) or
                 (name.startswith("job") and name.endswith(".mp4"))):
             continue                       # чужие файлы не наши — не трогаем
         path = os.path.join(out_dir, name)
@@ -581,7 +606,7 @@ def start_scheduler() -> None:
                        id="activity_tick", replace_existing=True, max_instances=1)
     _scheduler.add_job(_daily_backup, "interval", hours=24, id="daily_backup",
                        replace_existing=True, max_instances=1,
-                       next_run_time=datetime.now() + timedelta(minutes=10))
+                       next_run_time=clock.now() + timedelta(minutes=10))
     _scheduler.start()
 
 

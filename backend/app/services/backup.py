@@ -19,6 +19,7 @@ import tarfile
 import tempfile
 from datetime import datetime
 
+from .. import clock
 from ..config import settings
 
 BACKUP_KEEP = 7
@@ -60,7 +61,7 @@ def _copy_db(dst: str) -> None:
 
 def make_backup() -> str:
     """Создаёт архив и возвращает его имя. Старые сверх BACKUP_KEEP удаляет."""
-    name = f"vp-{datetime.now():%Y%m%d-%H%M%S}.tar.gz"
+    name = f"vp-{clock.now():%Y%m%d-%H%M%S}.tar.gz"
     target = os.path.join(backups_dir(), name)
     with tempfile.TemporaryDirectory() as tmp:
         db_copy = os.path.join(tmp, "video_poster.db")
@@ -94,7 +95,7 @@ def list_backups() -> list[dict]:
             continue
         path = os.path.join(backups_dir(), name)
         out.append({"name": name, "size": os.path.getsize(path),
-                    "created_at": datetime.fromtimestamp(os.path.getmtime(path)).isoformat()})
+                    "created_at": datetime.fromtimestamp(os.path.getmtime(path), clock.TZ).isoformat()})
     return sorted(out, key=lambda r: r["name"], reverse=True)
 
 

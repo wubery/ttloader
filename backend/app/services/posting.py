@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Account, Banner, Job, JobStatus, Video
 from . import caption as caption_service
+from .. import clock
 
 
 def _skip_reason(db: Session, account_id: int) -> str | None:
@@ -68,9 +69,9 @@ def create_jobs(
 
     lo, hi = sorted((max(0, spread_min), max(0, spread_max)))
     overlays_json = json.dumps(overlays, ensure_ascii=False) if overlays else None
-    # Планировщик сравнивает scheduled_at с наивным datetime.now(), поэтому и базу
-    # берём тем же now() — иначе сдвиг часовых поясов уводит время публикации.
-    base = scheduled_at or datetime.now()
+    # Всё время — наивное в поясе панели (см. clock.py): scheduled_at уже
+    # переведён в него схемой API, и база для разброса — тот же clock.now().
+    base = scheduled_at or clock.now()
 
     jobs: list[Job] = []
     skipped: list[str] = []
@@ -125,11 +126,20 @@ def create_jobs(
     # планировщик (_poll_due_jobs раз в минуту).
     from ..scheduler import submit_job
 
-    now = datetime.now()
+    now = clock.now()
     for job in jobs:
         if job.scheduled_at is None or job.scheduled_at <= now:
             submit_job(job.id)
     return jobs, skipped
+
+
+def part_label(template: str, n: int, total: int) -> str:
+    """Подпись части по шаблону: подставляются только {n} и {total}.
+
+    Раньше шаблон шёл в str.format: опечатка вроде {N} давала ошибку 500, а
+    {n.__class__} читал атрибуты объектов. Прочие скобки остаются как есть.
+    """
+    return (template or "").replace("{n}", str(n)).replace("{total}", str(total))
 
 
 def split_parts(duration: float, count: int) -> list[tuple[float, float]]:
@@ -195,7 +205,7 @@ def create_part_jobs(
     lo, hi = sorted((max(0, part_gap_min), max(0, part_gap_max)))
     acc_lo, acc_hi = sorted((max(0, spread_min), max(0, spread_max)))
     overlays_json = json.dumps(overlays, ensure_ascii=False) if overlays else None
-    base = scheduled_at or datetime.now()
+    base = scheduled_at or clock.now()
 
     jobs: list[Job] = []
     skipped: list[str] = []
@@ -209,7 +219,7 @@ def create_part_jobs(
         series: list[Job] = []
         offset = acc_offset
         for idx, (start, length) in enumerate(bounds, start=1):
-            label = caption_template.format(n=idx, total=len(bounds))
+            label = part_label(caption_template, idx, len(bounds))
             when: datetime | None
             if not jobs and scheduled_at is None and idx == 1:
                 when = None                       # самая первая часть уходит сразу
@@ -265,7 +275,7 @@ def create_part_jobs(
 
     from ..scheduler import submit_job
 
-    now = datetime.now()
+    now = clock.now()
     for job in jobs:
         if job.scheduled_at is None or job.scheduled_at <= now:
             submit_job(job.id)

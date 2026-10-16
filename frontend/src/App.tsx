@@ -71,7 +71,11 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   async function tgRequest() {
     setBusy(true); setErr(null);
     try { await api.tgLoginRequest(); setTgStep(true); }
-    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    catch (e: any) {
+      setErr(e.message);
+      // 429 — код уже отправлен недавно и ещё действует: даём его ввести
+      if (e.status === 429) setTgStep(true);
+    } finally { setBusy(false); }
   }
   async function tgVerify() {
     if (code.length !== 6) return;

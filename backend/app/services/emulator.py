@@ -239,6 +239,9 @@ def test_upload(addr: str, video_path: str, *, go_to_post: bool = False,
     fname = f"vp_{uuid.uuid4().hex[:10]}.mp4"
     remote = f"/sdcard/DCIM/Camera/{fname}"
     _adb("shell", "mkdir", "-p", "/sdcard/DCIM/Camera", serial=serial)
+    # Ролики прошлых проверок убираем: иначе каждый тест оставлял файл в галерее.
+    # Текущий остаётся — он открыт в TikTok и нужен, пока человек смотрит экран.
+    _adb("shell", "rm -f /sdcard/DCIM/Camera/vp_*.mp4", serial=serial)
     _adb("push", video_path, remote, serial=serial, timeout=600)
     log(f"Ролик загружен на устройство: {remote}")
 

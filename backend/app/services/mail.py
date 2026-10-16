@@ -25,6 +25,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
+from .. import clock
 
 log = logging.getLogger(__name__)
 
@@ -358,8 +359,10 @@ def find_login_code(account, db, since: datetime | None = None, limit: int = 15)
     и TikTok его не примет.
     """
     messages = list_messages(account, db, limit=limit)
-    if since is not None and since.tzinfo is None:
-        since = since.replace(tzinfo=timezone.utc)
+    # since — наивное время панели (clock.now()), а не UTC: приняв его за UTC,
+    # на поясе UTC+3 все письма выглядели бы на 3 часа старше входа и код
+    # не находился бы никогда.
+    since = clock.to_aware(since)
 
     for m in messages:
         blob = f"{m.sender} {m.subject}".lower()
@@ -449,7 +452,7 @@ def _poll_device_code(account_id: int, client_id: str, device_code: str, interva
                 return
             acc.mail_refresh_token_enc = encrypt(refresh)
             acc.mail_kind = "graph"
-            acc.mail_connected_at = datetime.now()
+            acc.mail_connected_at = clock.now()
             db.commit()
         finally:
             db.close()

@@ -21,11 +21,11 @@ import urllib.request
 from datetime import datetime, timedelta
 
 from ..db import SessionLocal
+from .. import clock
 
 log = logging.getLogger(__name__)
 
 _API = "https://api.telegram.org"
-_login_codes: dict[str, float] = {}  # code -> expiry ts
 _poller: threading.Thread | None = None
 _running = False
 
@@ -130,21 +130,60 @@ def notify(text: str) -> None:
 
 
 # ---------- Вход в панель через Telegram ----------
+# Код входа. Раньше каждый запрос (без входа и без ограничений) добавлял новый
+# код, а прежние продолжали действовать: заказав сотни кодов, их можно было
+# подбирать сотнями сразу. Теперь действует ровно один код, новый вытесняет
+# старый, а выдаются коды не чаще раза в минуту и не больше пяти за 15 минут.
+CODE_TTL = 300
+CODE_REQUEST_INTERVAL = 60
+CODE_REQUESTS_PER_WINDOW = 5
+CODE_REQUEST_WINDOW = 15 * 60
+# Неверных вводов подряд, после которых код сгорает
+MAX_CODE_FAILURES = 5
+
+_code_lock = threading.Lock()
+_active_code: tuple[str, float] | None = None    # (код, когда истекает)
+_code_failures = 0
+_code_requests: list[float] = []
+
+
+def code_request_wait(now: float | None = None) -> int:
+    """Сколько секунд ждать до следующего кода; 0 — можно выдавать."""
+    now = now or time.time()
+    with _code_lock:
+        recent = [t for t in _code_requests if now - t < CODE_REQUEST_WINDOW]
+        _code_requests[:] = recent
+        waits = []
+        if recent and now - recent[-1] < CODE_REQUEST_INTERVAL:
+            waits.append(CODE_REQUEST_INTERVAL - (now - recent[-1]))
+        if len(recent) >= CODE_REQUESTS_PER_WINDOW:
+            waits.append(CODE_REQUEST_WINDOW - (now - recent[0]))
+        return max(1, int(max(waits))) if waits else 0
+
+
 def issue_login_code() -> str:
     """Генерирует код и шлёт его во все настроенные чаты.
 
-    Возвращает «ok» | «not_configured» | «send_failed: причина» — вызывающему нужно
-    различать «не настроено» и «настроено, но не доставлено» (боту не нажали Start,
-    api.telegram.org заблокирован и не поднят туннель, неверный токен).
-    Код запоминается, только если доставлен хотя бы в один чат.
+    Возвращает «ok» | «not_configured» | «rate_limited:секунды» | «send_failed:
+    причина» — вызывающему нужно различать «не настроено», «рано» и «настроено,
+    но не доставлено» (боту не нажали Start, api.telegram.org заблокирован и не
+    поднят туннель, неверный токен). Код запоминается, только если доставлен
+    хотя бы в один чат.
     """
     import secrets
 
+    global _active_code, _code_failures
     token, chat_ids, enabled = _settings()
     if not (token and chat_ids and enabled):
         return "not_configured"
+    wait = code_request_wait()
+    if wait:
+        return f"rate_limited:{wait}"
+    with _code_lock:
+        _code_requests.append(time.time())
     code = f"{secrets.randbelow(1000000):06d}"
-    text = f"Код для входа в панель Video Poster: {code}\nДействует 5 минут."
+    text = (f"Код для входа в панель Video Poster: {code}\n"
+            "Действует 5 минут. Прежние коды больше не действуют.")
     delivered = False
     reasons: list[str] = []
     for cid in chat_ids:
@@ -155,31 +194,41 @@ def issue_login_code() -> str:
             reasons.append(f"{cid}: {why}")
     if not delivered:
         return "send_failed: " + "; ".join(reasons)
-    _login_codes[code] = time.time() + 300  # 5 минут
+    with _code_lock:
+        _active_code = (code, time.time() + CODE_TTL)
+        _code_failures = 0
     return "ok"
 
 
-# Неверных вводов подряд, после которых все выданные коды сгорают: иначе
-# шестизначный код за 5 минут жизни можно было перебирать без ограничений.
-MAX_CODE_FAILURES = 5
-_code_failures = 0
-
-
 def check_login_code(code: str) -> bool:
-    global _code_failures
-    exp = _login_codes.get(code)
-    if exp and exp >= time.time():
-        _login_codes.pop(code, None)
+    import hmac
+
+    global _active_code, _code_failures
+    with _code_lock:
+        if _active_code is None:
+            return False
+        expected, exp = _active_code
+        if exp < time.time():
+            _active_code = None
+            return False
+        if hmac.compare_digest(str(code or "").strip(), expected):
+            _active_code = None           # код одноразовый
+            _code_failures = 0
+            return True
+        _code_failures += 1
+        if _code_failures >= MAX_CODE_FAILURES:
+            _active_code = None           # перебирать дальше нечего
+            _code_failures = 0
+        return False
+
+
+def reset_login_codes() -> None:
+    """Для тестов: забыть выданный код и историю запросов."""
+    global _active_code, _code_failures
+    with _code_lock:
+        _active_code = None
         _code_failures = 0
-        return True
-    _code_failures += 1
-    if _code_failures >= MAX_CODE_FAILURES:
-        _login_codes.clear()
-        _code_failures = 0
-    # чистим протухшие
-    for c in [c for c, e in _login_codes.items() if e < time.time()]:
-        _login_codes.pop(c, None)
-    return False
+        _code_requests.clear()
 
 
 # ---------- Бот управления (команды + приём видео) ----------
@@ -391,7 +440,7 @@ def _cmd_stats(token: str, chat_id: str) -> None:
         videos = db.query(Video).count()
 
         # Статистика за последние 24 часа
-        since = datetime.now() - timedelta(hours=24)
+        since = clock.now() - timedelta(hours=24)
         recent_done = db.query(Job).filter(Job.status == JobStatus.done, Job.created_at >= since).count()
         recent_failed = db.query(Job).filter(Job.status == JobStatus.failed, Job.created_at >= since).count()
 
@@ -452,7 +501,7 @@ def _cmd_proxy(token: str, chat_id: str) -> None:
             ip = f" ({a.proxy_ip})" if a.proxy_ip else ""
             checked = ""
             if a.proxy_checked_at:
-                delta = datetime.now() - a.proxy_checked_at
+                delta = clock.now() - a.proxy_checked_at
                 if delta.total_seconds() < 3600:
                     checked = f" · {int(delta.total_seconds() / 60)}м назад"
                 else:

@@ -219,6 +219,20 @@ def load_storage_state(cookies_path: str) -> dict:
         return normalize_storage_state(json.load(f))
 
 
+# Куки, без которых сессии TikTok нет. Уход со страницы /login сам по себе
+# ничего не доказывает: TikTok мог увести на проверку или на главную гостем.
+SESSION_COOKIES = ("sessionid", "sessionid_ss", "sid_tt")
+
+
+def has_session_cookie(state: dict | None) -> bool:
+    """Есть ли в storage_state действующая кука сессии TikTok."""
+    for c in (state or {}).get("cookies") or []:
+        if (c.get("name") in SESSION_COOKIES and c.get("value")
+                and "tiktok" in (c.get("domain") or "")):
+            return True
+    return False
+
+
 def require_cookies(cookies_path: str | None) -> str:
     if not cookies_path or not os.path.exists(cookies_path):
         raise UploadError(

@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer
 
+from . import clock
 from .models import BannerType, JobStatus, Platform
+
+
+def _out_dt(dt: datetime) -> str:
+    return clock.to_aware(dt).isoformat()
+
+
+# Время в API. На входе — с поясом (панель шлёт toISOString, то есть UTC) или без
+# него (тогда это время панели); внутрь уходит наивное в поясе панели. На выходе
+# к нему дописывается пояс: без него браузер читал время как своё местное и
+# показывал запланированный пост на 3 часа раньше. Подробнее — clock.py.
+LocalDateTime = Annotated[datetime, AfterValidator(clock.to_local),
+                          PlainSerializer(_out_dt, return_type=str, when_used="json")]
 
 
 # ---------- Accounts ----------
@@ -60,28 +74,28 @@ class AccountOut(BaseModel):
     proxy_url: str | None
     proxy_ok: bool | None
     proxy_ip: str | None
-    proxy_checked_at: datetime | None
+    proxy_checked_at: LocalDateTime | None
     uniqueize: bool
     uniq_profile_id: int | None
     group_id: int | None
     active: bool
     has_cookies: bool
-    created_at: datetime
+    created_at: LocalDateTime
     # Проверка активности
     tiktok_handle: str | None = None
     activity_on: bool = True
     likes_on: bool = True
-    last_activity_at: datetime | None = None
-    next_activity_at: datetime | None = None
+    last_activity_at: LocalDateTime | None = None
+    next_activity_at: LocalDateTime | None = None
     # Автовход
     tt_login: str | None = None
     has_tt_credentials: bool = False
     mail_address: str | None = None
     mail_kind: str | None = None
     mail_connected: bool = False
-    mail_connected_at: datetime | None = None
+    mail_connected_at: LocalDateTime | None = None
     auto_login: bool = True
-    last_login_at: datetime | None = None
+    last_login_at: LocalDateTime | None = None
     login_error: str | None = None
 
 
@@ -120,8 +134,8 @@ class AutoLoginStateOut(BaseModel):
     stage: str
     message: str | None = None
     screenshot: str | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    started_at: LocalDateTime | None = None
+    finished_at: LocalDateTime | None = None
 
 
 # ---------- Mail ----------
@@ -129,7 +143,7 @@ class MailMessageOut(BaseModel):
     id: str
     sender: str
     subject: str
-    received_at: datetime | None = None
+    received_at: LocalDateTime | None = None
     preview: str = ""
 
 
@@ -220,7 +234,7 @@ class ActivitySettingsOut(BaseModel):
     likes_interval_max: int
     like_cooldown_hours: int
     activity_max_concurrent: int
-    next_likes_at: datetime | None = None
+    next_likes_at: LocalDateTime | None = None
     posts_per_day_max: int = 0
     warmup_enabled: bool
     warmup_days: int
@@ -259,7 +273,7 @@ class WarmupOut(BaseModel):
     days_total: int
     percent: int
     likes_allowed: bool
-    started_at: datetime | None = None
+    started_at: LocalDateTime | None = None
 
 
 class ActivityRunOut(BaseModel):
@@ -273,7 +287,7 @@ class ActivityRunOut(BaseModel):
     target_name: str | None = None
     status: str
     detail: str | None = None
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 # ---------- Videos ----------
@@ -292,7 +306,7 @@ class VideoOut(BaseModel):
     height: int | None
     duration: float | None
     folder_id: int | None = None
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 # ---------- Hooks / Overlays / Uniq-профили ----------
@@ -306,7 +320,7 @@ class HookOut(BaseModel):
     height: int | None
     duration: float | None
     folder_id: int | None = None
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 class OverlayAssetOut(BaseModel):
@@ -315,7 +329,7 @@ class OverlayAssetOut(BaseModel):
     id: int
     name: str
     filename: str
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 class AdClipOut(BaseModel):
@@ -327,7 +341,7 @@ class AdClipOut(BaseModel):
     width: int | None
     height: int | None
     duration: float | None
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 class BackgroundOut(BaseModel):
@@ -338,7 +352,7 @@ class BackgroundOut(BaseModel):
     filename: str
     is_video: bool
     folder_id: int | None = None
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 # ---------- Папки библиотек ----------
@@ -359,7 +373,7 @@ class AssetFolderOut(BaseModel):
     name: str
     group_ids: list[int]           # пустой список = папка ничего не ограничивает
     items_count: int
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 class FolderAssign(BaseModel):
@@ -384,7 +398,7 @@ class AccountGroupOut(BaseModel):
     name: str
     color: str | None
     accounts_count: int          # для подписи «N аккаунтов» в панели
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 class UniqProfileCreate(BaseModel):
@@ -404,7 +418,7 @@ class UniqProfileOut(BaseModel):
     name: str
     params: dict          # наружу отдаём разобранным объектом, а не строкой
     is_default: bool
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 # ---------- Banners ----------
@@ -431,7 +445,7 @@ class BannerOut(BaseModel):
     opacity: float
     motion: str
     motion_speed: float
-    created_at: datetime
+    created_at: LocalDateTime
 
 
 # ---------- Jobs ----------
@@ -444,7 +458,7 @@ class JobCreate(BaseModel):
     banner_x: float | None = None
     banner_y: float | None = None
     banner_scale: float | None = None
-    scheduled_at: datetime | None = None
+    scheduled_at: LocalDateTime | None = None
     # Слои редактора: несколько баннеров и текстов. Если заданы — имеют приоритет
     # над одиночным banner_id (см. services/media.render_with_overlays).
     overlays: list[dict] | None = None
@@ -461,7 +475,7 @@ class JobBulkCreate(BaseModel):
     banner_x: float | None = None
     banner_y: float | None = None
     banner_scale: float | None = None
-    scheduled_at: datetime | None = None
+    scheduled_at: LocalDateTime | None = None
     overlays: list[dict] | None = None
     # Случайная пауза между аккаунтами, минуты: пачка не уходит залпом.
     spread_min_minutes: int = 5
@@ -481,7 +495,7 @@ class JobPartsCreate(BaseModel):
     label_on: bool = True                 # рисовать подпись части поверх видео
     banner_id: int | None = None
     overlays: list[dict] | None = None
-    scheduled_at: datetime | None = None
+    scheduled_at: LocalDateTime | None = None
     uniq_profile_id: int | None = None
     # Пауза между частями одной серии, минуты
     part_gap_min_minutes: int = 30
@@ -508,16 +522,16 @@ class JobOut(BaseModel):
     banner_scale: float | None
     overlays: str | None      # JSON-строка со слоями (как хранится в БД)
     status: JobStatus
-    scheduled_at: datetime | None
+    scheduled_at: LocalDateTime | None
     output_filename: str | None
     error: str | None
     log: str
     posted_url: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: LocalDateTime
+    updated_at: LocalDateTime
     # Автоповтор: сколько попыток сделано и когда следующая
     attempts: int = 0
-    retry_at: datetime | None = None
+    retry_at: LocalDateTime | None = None
     # Список очереди опрашивается раз в 4 секунды, поэтому лог в нём — только
     # хвост; целиком — GET /api/jobs/{id}/log
     log_truncated: bool = False

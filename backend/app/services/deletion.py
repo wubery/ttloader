@@ -46,10 +46,15 @@ def _drop_job(db: Session, job: Job) -> None:
     db.delete(job)
 
 
-def delete_job(db: Session, job: Job) -> None:
+def drop_job(db: Session, job: Job) -> None:
+    """Удаляет задачу без commit (для удаления вместе с владельцем)."""
     if job.status in RUNNING:
         raise DeleteBlocked("Задача сейчас выполняется — дождитесь окончания.")
     _drop_job(db, job)
+
+
+def delete_job(db: Session, job: Job) -> None:
+    drop_job(db, job)
     db.commit()
 
 

@@ -68,10 +68,21 @@ def _recover_interrupted_jobs() -> None:
         db.close()
 
 
+def _migrate_times() -> None:
+    """Даты, сохранённые до единых часов, — в пояс панели (один раз, см. clock.py)."""
+    from . import clock
+
+    try:
+        clock.migrate_stored_times()
+    except Exception as e:  # noqa: BLE001 — панель должна подняться в любом случае
+        print(f"[clock] Не удалось перевести даты в пояс панели: {e}", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     bootstrap_settings()
+    _migrate_times()
     _recover_interrupted_jobs()
     _repair_tiktok_links()
     start_scheduler()

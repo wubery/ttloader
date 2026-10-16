@@ -18,6 +18,7 @@ import base64
 from .uploaders.base import (
     STEALTH_INIT_JS,
     UploadError,
+    has_session_cookie,
     parse_proxy,
     stealth_context_kwargs,
     stealth_launch_kwargs,
@@ -184,9 +185,15 @@ class LoginManager:
         """Формирует ответ; на done — отдаёт storage_state и закрывает сессию."""
         result: dict = {"stage": stage}
         if stage == "done":
-            result["storage_state"] = await self._context.storage_state()
-            await self._teardown()
-        elif stage in ("captcha", "unknown"):
+            state = await self._context.storage_state()
+            if has_session_cookie(state):
+                result["storage_state"] = state
+                await self._teardown()
+                return result
+            # Ушли со страницы входа, но сессии нет — это не вход, и куки
+            # аккаунта перезаписывать нечем.
+            stage = result["stage"] = "unknown"
+        if stage in ("captcha", "unknown"):
             result["screenshot"] = await self._screenshot_b64()
             result["message"] = (
                 "TikTok показал проверку (капчу) или неожиданный шаг. "

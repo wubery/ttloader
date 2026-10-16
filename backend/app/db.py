@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import DateTime, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -57,21 +57,33 @@ def _sql_literal(value: object) -> str:
         return "'" + s.replace("'", "''") + "'"
 
 
-def _default_sql(col) -> str | None:
-    """SQL-литерал значения по умолчанию колонки (server_default или Python-default)."""
+def _default_sql(col) -> tuple[str | None, bool]:
+    """(SQL значения по умолчанию, постоянное ли оно) — из server_default или
+    Python-default.
+
+    Функция (func.now()) — не постоянное значение: SQLite не даёт подставить
+    её в ALTER TABLE ADD COLUMN, но в UPDATE она годится. Раньше она уходила
+    строковым литералом 'now()': старые строки получали это вместо даты, и
+    чтение таблицы падало («Invalid isoformat string») — панель ложилась сразу
+    после обновления, добавившего колонку времени.
+    """
+    from sqlalchemy.sql.elements import ClauseElement
+
     sd = col.server_default
     if sd is not None:
         arg = getattr(sd, "arg", None)
         # TextClause (text("...")) — берём как есть, строку/число — как литерал
         clause = getattr(arg, "text", None)
         if clause is not None:
-            return clause
+            return clause, True
+        if isinstance(arg, ClauseElement):
+            return str(arg.compile(dialect=engine.dialect)), False
         if arg is not None:
-            return _sql_literal(arg)
+            return _sql_literal(arg), True
     d = col.default
     if d is not None and getattr(d, "is_scalar", False):
-        return _sql_literal(d.arg)
-    return None
+        return _sql_literal(d.arg), True
+    return None, True
 
 
 def _auto_migrate() -> None:
@@ -84,11 +96,11 @@ def _auto_migrate() -> None:
             continue
         existing = {c["name"] for c in insp.get_columns(table.name)}
         for col in table.columns:
-            dsql = _default_sql(col)
+            dsql, constant = _default_sql(col)
             if col.name not in existing:
                 coltype = col.type.compile(dialect=engine.dialect)
                 ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'
-                if dsql is not None:
+                if dsql is not None and constant:
                     ddl += f" DEFAULT {dsql}"
                 with engine.begin() as conn:
                     conn.execute(text(ddl))
@@ -96,6 +108,11 @@ def _auto_migrate() -> None:
             # DEFAULT в ALTER не подставлялся) — для NOT NULL-колонок это ломает
             # ответы API «Input should be a valid string». Дозаполняем.
             if not col.nullable and dsql is not None:
+                if not constant and isinstance(col.type, DateTime):
+                    # CURRENT_TIMESTAMP — это UTC, а даты панели живут в её поясе
+                    from . import clock
+
+                    dsql = f"'{clock.now():%Y-%m-%d %H:%M:%S.%f}'"
                 with engine.begin() as conn:
                     conn.execute(
                         text(f'UPDATE "{table.name}" SET "{col.name}" = {dsql} WHERE "{col.name}" IS NULL')
